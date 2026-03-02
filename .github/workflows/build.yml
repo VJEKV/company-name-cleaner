@@ -34,21 +34,26 @@ jobs:
         run: |
           pyinstaller --onefile --windowed --name "TitanCleaner" --add-data "assets\stamps;assets\stamps" main.py
 
-      - name: Download portable Tesseract
+      - name: Install Tesseract via choco
+        run: choco install tesseract --no-progress -y
+
+      - name: Bundle portable Tesseract
         shell: pwsh
         run: |
-          $url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.4.0.20240606/tesseract-ocr-w64-setup-5.4.0.20240606.exe"
-          Invoke-WebRequest -Uri $url -OutFile tesseract-setup.exe
-          # Silent install to temp dir
-          Start-Process -Wait -FilePath .\tesseract-setup.exe -ArgumentList '/S', '/D=C:\TesseractPortable'
-          # Copy only what we need
-          New-Item -ItemType Directory -Path dist\TitanCleaner\tesseract\tessdata -Force
-          Copy-Item C:\TesseractPortable\tesseract.exe dist\TitanCleaner\tesseract\
-          Copy-Item C:\TesseractPortable\*.dll dist\TitanCleaner\tesseract\
-          # Language data
-          Copy-Item C:\TesseractPortable\tessdata\eng.traineddata dist\TitanCleaner\tesseract\tessdata\
-          Copy-Item C:\TesseractPortable\tessdata\rus.traineddata dist\TitanCleaner\tesseract\tessdata\
-          Copy-Item C:\TesseractPortable\tessdata\osd.traineddata dist\TitanCleaner\tesseract\tessdata\
+          $src = "C:\Program Files\Tesseract-OCR"
+          $dst = "dist\TitanCleaner\tesseract"
+          New-Item -ItemType Directory -Path "$dst\tessdata" -Force
+          # Бинарники
+          Copy-Item "$src\tesseract.exe" "$dst\"
+          Copy-Item "$src\*.dll" "$dst\"
+          # Языковые данные (eng идёт с choco)
+          Copy-Item "$src\tessdata\eng.traineddata" "$dst\tessdata\"
+          Copy-Item "$src\tessdata\osd.traineddata" "$dst\tessdata\"
+          # Скачиваем русский язык отдельно
+          $rusUrl = "https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata"
+          Invoke-WebRequest -Uri $rusUrl -OutFile "$dst\tessdata\rus.traineddata"
+          # Проверка
+          Get-ChildItem -Recurse "$dst" | Format-Table Name, Length
 
       - name: Package portable ZIP
         shell: pwsh
