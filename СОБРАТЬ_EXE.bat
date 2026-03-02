@@ -1,9 +1,9 @@
 @echo off
 chcp 65001 >nul 2>&1
-title Сборка CompanyCleaner.exe
+title Сборка TitanCleaner.exe
 
 echo ============================================
-echo   Сборка CompanyCleaner.exe
+echo   Сборка TitanCleaner.exe
 echo ============================================
 echo.
 
@@ -26,12 +26,12 @@ echo.
 echo Сборка .exe (это займёт 1-3 минуты)...
 echo.
 
-pyinstaller --onefile --windowed --name "CompanyCleaner" --add-data "assets\stamps;assets\stamps" main.py
+pyinstaller --onefile --windowed --name "TitanCleaner" --add-data "assets\stamps;assets\stamps" main.py
 
 if %errorlevel% equ 0 (
     echo.
     echo ============================================
-    echo   ГОТОВО! Файл: dist\CompanyCleaner.exe
+    echo   ГОТОВО! Файл: dist\TitanCleaner.exe
     echo ============================================
     echo.
     explorer dist

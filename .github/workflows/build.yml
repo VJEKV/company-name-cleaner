@@ -30,17 +30,17 @@ jobs:
 
       - name: Build EXE
         run: |
-          pyinstaller --onefile --windowed --name "CompanyCleaner" --add-data "assets\stamps;assets\stamps" main.py
+          pyinstaller --onefile --windowed --name "TitanCleaner" --add-data "assets\stamps;assets\stamps" main.py
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: CompanyCleaner-Windows
-          path: dist/CompanyCleaner.exe
+          name: TitanCleaner-Windows
+          path: dist/TitanCleaner.exe
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/CompanyCleaner.exe
+          files: dist/TitanCleaner.exe
           generate_release_notes: true

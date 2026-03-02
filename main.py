@@ -34,7 +34,7 @@ from core.utils import (
     format_file_size,
 )
 
-APP_TITLE = "Company Name Cleaner v1.0"
+APP_TITLE = "Titan Cleaner v1.0"
 WINDOW_WIDTH = 880
 WINDOW_HEIGHT = 800
 
