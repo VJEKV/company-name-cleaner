@@ -82,10 +82,20 @@ def generate_confidential(path: Path, width: int = 200, height: int = 40):
 
     # Текст
     text = "КОНФИДЕНЦИАЛЬНО"
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 14)
-    except (OSError, IOError):
-        font = ImageFont.load_default()
+    font = ImageFont.load_default()
+    # Try system fonts that support Cyrillic
+    font_paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",  # Linux
+        "C:/Windows/Fonts/arial.ttf",  # Windows
+        "C:/Windows/Fonts/arialbd.ttf",  # Windows bold
+        "/System/Library/Fonts/Helvetica.ttc",  # macOS
+    ]
+    for fp in font_paths:
+        try:
+            font = ImageFont.truetype(fp, 14)
+            break
+        except (OSError, IOError):
+            continue
 
     bbox = draw.textbbox((0, 0), text, font=font)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
@@ -119,16 +129,16 @@ def main():
     stamps_dir = get_assets_dir()
     stamps_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Генерация штампов...")
+    print("Generating stamps...")
     generate_daisy(stamps_dir / "daisy.png")
-    print("  ✓ daisy.png")
+    print("  + daisy.png")
     generate_lock(stamps_dir / "lock.png")
-    print("  ✓ lock.png")
+    print("  + lock.png")
     generate_confidential(stamps_dir / "confidential.png")
-    print("  ✓ confidential.png")
+    print("  + confidential.png")
     generate_star(stamps_dir / "star.png")
-    print("  ✓ star.png")
-    print("Готово!")
+    print("  + star.png")
+    print("Done!")
 
 
 if __name__ == "__main__":

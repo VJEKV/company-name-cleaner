@@ -25,6 +25,8 @@ jobs:
 
       - name: Generate stamps
         run: python generate_stamps.py
+        env:
+          PYTHONUTF8: "1"
 
       - name: Build EXE
         run: |
