@@ -2,11 +2,14 @@
 OCR-утилиты для обработки отсканированных PDF-страниц.
 Использует pytesseract (Tesseract OCR) для извлечения текста с координатами.
 
-Tesseract — внешняя зависимость. При отсутствии модуль gracefully деградирует:
+Портативный режим: Tesseract ищется рядом с EXE (tesseract/tesseract.exe),
+что позволяет работать с флешки без установки.
+При отсутствии модуль gracefully деградирует:
 is_tesseract_available() вернёт False, остальные функции не вызываются.
 """
 
 import os
+import sys
 import logging
 import shutil
 from io import BytesIO
@@ -17,6 +20,13 @@ logger = logging.getLogger('CompanyCleaner')
 
 _pytesseract = None
 _tesseract_available = None
+
+
+def _get_app_dir() -> str:
+    """Возвращает директорию приложения (рядом с EXE или main.py)."""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def is_tesseract_available() -> bool:
@@ -32,12 +42,22 @@ def is_tesseract_available() -> bool:
         _tesseract_available = False
         return False
 
-    # Проверяем бинарник в PATH
+    # 1. Портативный Tesseract рядом с EXE
+    app_dir = _get_app_dir()
+    portable_exe = os.path.join(app_dir, "tesseract", "tesseract.exe")
+    portable_tessdata = os.path.join(app_dir, "tesseract", "tessdata")
+    if os.path.exists(portable_exe):
+        pt.pytesseract.tesseract_cmd = portable_exe
+        os.environ["TESSDATA_PREFIX"] = portable_tessdata
+        _tesseract_available = True
+        return True
+
+    # 2. Tesseract в PATH
     if shutil.which("tesseract"):
         _tesseract_available = True
         return True
 
-    # Windows fallback
+    # 3. Windows стандартный путь установки
     win_path = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
     if os.path.exists(win_path):
         pt.pytesseract.tesseract_cmd = win_path

@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -32,15 +34,40 @@ jobs:
         run: |
           pyinstaller --onefile --windowed --name "TitanCleaner" --add-data "assets\stamps;assets\stamps" main.py
 
+      - name: Download portable Tesseract
+        shell: pwsh
+        run: |
+          $url = "https://github.com/UB-Mannheim/tesseract/releases/download/v5.5.0.20241111/tesseract-ocr-w64-setup-5.5.0.20241111.exe"
+          Invoke-WebRequest -Uri $url -OutFile tesseract-setup.exe
+          # Silent install to temp dir
+          Start-Process -Wait -FilePath .\tesseract-setup.exe -ArgumentList '/S', '/D=C:\TesseractPortable'
+          # Copy only what we need
+          New-Item -ItemType Directory -Path dist\TitanCleaner\tesseract\tessdata -Force
+          Copy-Item C:\TesseractPortable\tesseract.exe dist\TitanCleaner\tesseract\
+          Copy-Item C:\TesseractPortable\*.dll dist\TitanCleaner\tesseract\
+          # Language data
+          Copy-Item C:\TesseractPortable\tessdata\eng.traineddata dist\TitanCleaner\tesseract\tessdata\
+          Copy-Item C:\TesseractPortable\tessdata\rus.traineddata dist\TitanCleaner\tesseract\tessdata\
+          Copy-Item C:\TesseractPortable\tessdata\osd.traineddata dist\TitanCleaner\tesseract\tessdata\
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          # Move EXE into folder
+          New-Item -ItemType Directory -Path dist\TitanCleaner -Force
+          Move-Item dist\TitanCleaner.exe dist\TitanCleaner\ -Force
+          # Create ZIP
+          Compress-Archive -Path dist\TitanCleaner -DestinationPath dist\TitanCleaner-Portable.zip
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: TitanCleaner-Windows
-          path: dist/TitanCleaner.exe
+          name: TitanCleaner-Portable
+          path: dist/TitanCleaner-Portable.zip
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/TitanCleaner.exe
+          files: dist/TitanCleaner-Portable.zip
           generate_release_notes: true
