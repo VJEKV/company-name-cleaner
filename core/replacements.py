@@ -55,6 +55,42 @@ SURNAME_REPLACEMENTS = {
     ],
 }
 
+CITY_REPLACEMENTS = {
+    "Нейтральные": [
+        'г. Ромашкино',
+        'г. Цветочное',
+        'г. Светлоград',
+    ],
+    "Очевидные заглушки": [
+        '[ГОРОД]',
+        '███████',
+        'ХХХХХХ',
+    ],
+}
+
+SIGNATORY_REPLACEMENTS = {
+    "Стандартные": [
+        'Иванов И.И.',
+        'Петров П.П.',
+    ],
+    "Нейтральные": [
+        'Подписант',
+        'Руководитель',
+    ],
+    "Очевидные заглушки": [
+        '[ПОДПИСАНТ]',
+        '███████',
+    ],
+}
+
+GENERIC_REPLACEMENTS = {
+    "Очевидные заглушки": [
+        '[ЗАГЛУШКА]',
+        '███████',
+        'ХХХХХХ',
+    ],
+}
+
 RUSSIAN_ALPHABET = 'АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШЩЭЮЯ'
 
 
@@ -64,6 +100,18 @@ def get_company_replacement_options() -> dict[str, list[str]]:
 
 def get_surname_replacement_options() -> dict[str, list[str]]:
     return SURNAME_REPLACEMENTS
+
+
+def get_city_replacement_options() -> dict[str, list[str]]:
+    return CITY_REPLACEMENTS
+
+
+def get_signatory_replacement_options() -> dict[str, list[str]]:
+    return SIGNATORY_REPLACEMENTS
+
+
+def get_generic_replacement_options() -> dict[str, list[str]]:
+    return GENERIC_REPLACEMENTS
 
 
 def generate_sequential_replacement(template: str, index: int) -> str:

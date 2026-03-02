@@ -106,6 +106,102 @@ def build_company_patterns(
     return [re.compile(p, flags) for p in unique]
 
 
+def build_city_patterns(
+    city_name: str,
+    case_insensitive: bool = True,
+) -> list[re.Pattern]:
+    """
+    Генерирует regex-паттерны для названия города с падежами и префиксами.
+
+    Для "Москва" генерирует:
+    - г. Москва, г.Москва, город Москва
+    - Москвы, Москве, Москвой, Москву (падежи)
+    """
+    flags = re.IGNORECASE if case_insensitive else 0
+    raw_patterns: list[str] = []
+    name = city_name.strip()
+    name_escaped = re.escape(name)
+
+    # Падежные окончания для городов
+    city_suffixes = _get_city_case_forms(name)
+
+    # Все формы названия
+    all_forms = [re.escape(f) for f in city_suffixes]
+    forms_alt = '|'.join(sorted(all_forms, key=len, reverse=True))
+
+    # С префиксом "г." / "г. " / "город "
+    raw_patterns.append(rf'(?:г\.\s*|город\s+)(?:{forms_alt})')
+
+    # Просто название с падежами
+    raw_patterns.append(rf'\b(?:{forms_alt})\b')
+
+    # Убираем дубликаты
+    seen = set()
+    unique: list[str] = []
+    for p in raw_patterns:
+        if p not in seen:
+            seen.add(p)
+            unique.append(p)
+
+    unique.sort(key=len, reverse=True)
+    return [re.compile(p, flags) for p in unique]
+
+
+def _get_city_case_forms(city_name: str) -> list[str]:
+    """
+    Возвращает падежные формы города.
+    Поддерживает типичные окончания: -а, -о, -ск, -ий, согласная.
+    """
+    forms = {city_name}
+    lower = city_name.lower()
+
+    if lower.endswith('а'):
+        base = city_name[:-1]
+        forms.update([
+            base + 'а', base + 'ы', base + 'е',
+            base + 'у', base + 'ой', base + 'ою',
+        ])
+    elif lower.endswith('я'):
+        base = city_name[:-1]
+        forms.update([
+            base + 'я', base + 'и', base + 'е',
+            base + 'ю', base + 'ей', base + 'ею',
+        ])
+    elif lower.endswith('о') or lower.endswith('е'):
+        base = city_name[:-1]
+        suffix = city_name[-1]
+        forms.update([
+            base + suffix, base + 'а', base + 'у',
+            base + 'ом', base + 'е',
+        ])
+    elif lower.endswith('ий') or lower.endswith('ый'):
+        base = city_name[:-2]
+        forms.update([
+            base + 'ий', base + 'ый', base + 'ого',
+            base + 'ому', base + 'им', base + 'ом',
+        ])
+    else:
+        # Согласная: Саратов, Иркутск и т.д.
+        forms.update([
+            city_name, city_name + 'а', city_name + 'у',
+            city_name + 'ом', city_name + 'е',
+        ])
+
+    return list(forms)
+
+
+def build_custom_patterns(
+    search_text: str,
+    case_insensitive: bool = True,
+) -> list[re.Pattern]:
+    """
+    Простой текстовый поиск — для произвольных полей (ИНН, адрес и т.п.).
+    """
+    flags = re.IGNORECASE if case_insensitive else 0
+    escaped = re.escape(search_text.strip())
+    return [re.compile(escaped, flags)]
+
+
 def build_replacement_for_company(
     original_match: str,
     company_replacement: str,

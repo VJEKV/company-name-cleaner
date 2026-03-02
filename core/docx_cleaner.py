@@ -7,10 +7,16 @@
 3. Ищем паттерны в склеенном тексте
 4. ЗАМЕНЯЕМ найденное на заглушку (не удаляем!)
 5. Модифицируем runs, сохраняя форматирование первого затронутого run
+
+replacement_rules — универсальный формат:
+  [
+    {"patterns": [...], "replacement": "текст", "type": "company"},
+    {"patterns": [...], "mapper": ReplacementMapper, "type": "surnames"},
+    ...
+  ]
 """
 
 import re
-import copy
 import logging
 from pathlib import Path
 from docx import Document
@@ -19,18 +25,25 @@ from docx.oxml.ns import qn
 logger = logging.getLogger('CompanyCleaner')
 
 
+def _get_replacement_text(rule: dict, matched_text: str) -> str:
+    """Получает текст замены из правила."""
+    if "mapper" in rule and rule["mapper"] is not None:
+        return rule["mapper"].get_replacement(matched_text)
+    return rule.get("replacement", "[ЗАГЛУШКА]")
+
+
 def clean_docx(
     filepath: str,
     output_path: str,
-    company_patterns: list[re.Pattern],
-    surname_patterns: list[re.Pattern],
-    company_replacement: str,
-    surname_mapper,
+    replacement_rules: list[dict],
 ) -> dict:
     """
-    Заменяет вхождения названия компании и фамилий на заглушки.
+    Заменяет вхождения на заглушки по списку правил.
 
-    Возвращает словарь со статистикой.
+    replacement_rules: список словарей с ключами:
+      - patterns: list[re.Pattern]
+      - replacement: str ИЛИ mapper: ReplacementMapper
+      - type: str (для статистики)
     """
     try:
         doc = Document(filepath)
@@ -38,30 +51,23 @@ def clean_docx(
         logger.error(f"Не удалось открыть {filepath}: {e}")
         return {
             "status": "error",
-            "company_matches": 0,
-            "surname_matches": 0,
+            "matches": {},
             "total_replacements": 0,
             "error_message": str(e),
         }
 
-    stats = {"company": 0, "surname": 0}
+    stats = {}  # type -> count
 
     # 1. Параграфы основного текста
     for paragraph in doc.paragraphs:
-        stats = _process_paragraph(
-            paragraph, company_patterns, surname_patterns,
-            company_replacement, surname_mapper, stats
-        )
+        stats = _process_paragraph(paragraph, replacement_rules, stats)
 
     # 2. Таблицы
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for paragraph in cell.paragraphs:
-                    stats = _process_paragraph(
-                        paragraph, company_patterns, surname_patterns,
-                        company_replacement, surname_mapper, stats
-                    )
+                    stats = _process_paragraph(paragraph, replacement_rules, stats)
 
     # 3. Колонтитулы
     for section in doc.sections:
@@ -74,10 +80,7 @@ def clean_docx(
                     linked = True
                 if not linked:
                     for paragraph in header.paragraphs:
-                        stats = _process_paragraph(
-                            paragraph, company_patterns, surname_patterns,
-                            company_replacement, surname_mapper, stats
-                        )
+                        stats = _process_paragraph(paragraph, replacement_rules, stats)
         for footer in [section.footer, section.first_page_footer,
                        section.even_page_footer]:
             if footer is not None:
@@ -87,10 +90,7 @@ def clean_docx(
                     linked = True
                 if not linked:
                     for paragraph in footer.paragraphs:
-                        stats = _process_paragraph(
-                            paragraph, company_patterns, surname_patterns,
-                            company_replacement, surname_mapper, stats
-                        )
+                        stats = _process_paragraph(paragraph, replacement_rules, stats)
 
     try:
         doc.save(output_path)
@@ -98,38 +98,29 @@ def clean_docx(
         logger.error(f"Не удалось сохранить {output_path}: {e}")
         return {
             "status": "error",
-            "company_matches": stats["company"],
-            "surname_matches": stats["surname"],
-            "total_replacements": stats["company"] + stats["surname"],
+            "matches": stats,
+            "total_replacements": sum(stats.values()),
             "error_message": str(e),
         }
 
     return {
         "status": "success",
-        "company_matches": stats["company"],
-        "surname_matches": stats["surname"],
-        "total_replacements": stats["company"] + stats["surname"],
+        "matches": stats,
+        "total_replacements": sum(stats.values()),
         "error_message": None,
     }
 
 
-def _process_paragraph(paragraph, company_patterns, surname_patterns,
-                       company_replacement, surname_mapper, stats):
+def _process_paragraph(paragraph, replacement_rules, stats):
     """
     Ключевой алгоритм замены текста в параграфе с сохранением форматирования.
-
-    1. Склеиваем текст всех runs
-    2. Строим карту символ → (run_index, char_index_in_run)
-    3. Ищем паттерны (сначала длинные, потом короткие)
-    4. Заменяем, сохраняя форматирование первого затронутого run
     """
     runs = paragraph.runs
     if not runs:
         return stats
 
-    # Склеиваем текст и строим карту
     full_text = ''
-    char_map = []  # [(run_index, char_index_in_run), ...]
+    char_map = []
 
     for run_idx, run in enumerate(runs):
         run_text = run.text or ''
@@ -143,18 +134,12 @@ def _process_paragraph(paragraph, company_patterns, surname_patterns,
     # Собираем все замены: (start, end, replacement_text, type)
     replacements = []
 
-    # Сначала компания (длинные паттерны приоритетнее)
-    for pattern in company_patterns:
-        for match in pattern.finditer(full_text):
-            replacements.append((match.start(), match.end(),
-                                 company_replacement, "company"))
-
-    # Потом фамилии
-    for pattern in surname_patterns:
-        for match in pattern.finditer(full_text):
-            replacement = surname_mapper.get_replacement(match.group())
-            replacements.append((match.start(), match.end(),
-                                 replacement, "surname"))
+    for rule in replacement_rules:
+        rule_type = rule.get("type", "custom")
+        for pattern in rule.get("patterns", []):
+            for match in pattern.finditer(full_text):
+                repl = _get_replacement_text(rule, match.group())
+                replacements.append((match.start(), match.end(), repl, rule_type))
 
     if not replacements:
         return stats
@@ -186,7 +171,6 @@ def _process_paragraph(paragraph, company_patterns, surname_patterns,
 
     # Перезаписываем runs: весь текст в первый run, остальные очищаем
     if runs:
-        # Сохраняем форматирование первого run
         runs[0].text = new_text
         for run in runs[1:]:
             run.text = ''
@@ -196,9 +180,7 @@ def _process_paragraph(paragraph, company_patterns, surname_patterns,
 
 def preview_docx(
     filepath: str,
-    company_patterns: list[re.Pattern],
-    surname_patterns: list[re.Pattern],
-    surname_mapper,
+    replacement_rules: list[dict],
     context_chars: int = 30,
 ) -> dict:
     """
@@ -212,7 +194,6 @@ def preview_docx(
     matches = []
     all_paragraphs = []
 
-    # Собираем все параграфы
     for p in doc.paragraphs:
         all_paragraphs.append(p)
     for table in doc.tables:
@@ -226,33 +207,45 @@ def preview_docx(
         if not text.strip():
             continue
 
-        for pattern in company_patterns + surname_patterns:
-            for match in pattern.finditer(text):
-                start = max(0, match.start() - context_chars)
-                end = min(len(text), match.end() + context_chars)
-                context = text[start:end]
-                if start > 0:
-                    context = '...' + context
-                if end < len(text):
-                    context = context + '...'
+        # Собираем с дедупликацией перекрытий
+        text_matches = []
+        for rule in replacement_rules:
+            rule_type = rule.get("type", "custom")
+            for pattern in rule.get("patterns", []):
+                for match in pattern.finditer(text):
+                    repl = _get_replacement_text(rule, match.group())
+                    text_matches.append(
+                        (match.start(), match.end(), match.group(),
+                         repl, rule_type)
+                    )
 
-                is_company = pattern in company_patterns
-                if is_company:
-                    repl = '[ЗАГЛУШКА КОМПАНИИ]'
-                else:
-                    repl = surname_mapper.get_replacement(match.group()) \
-                        if surname_mapper else '[ЗАГЛУШКА ФИО]'
+        text_matches.sort(key=lambda m: (m[0], -(m[1] - m[0])))
+        last_end = 0
+        for mstart, mend, original, repl, rule_type in text_matches:
+            if mstart < last_end:
+                continue
+            last_end = mend
+            ctx_start = max(0, mstart - context_chars)
+            ctx_end = min(len(text), mend + context_chars)
+            context = text[ctx_start:ctx_end]
+            if ctx_start > 0:
+                context = '...' + context
+            if ctx_end < len(text):
+                context = context + '...'
+            matches.append({
+                "original": original,
+                "replacement": repl,
+                "context": context,
+                "type": rule_type,
+            })
 
-                matches.append({
-                    "original": match.group(),
-                    "replacement": repl,
-                    "context": context,
-                    "type": "company" if is_company else "surname",
-                })
+    type_counts = {}
+    for m in matches:
+        t = m["type"]
+        type_counts[t] = type_counts.get(t, 0) + 1
 
     return {
         "status": "success",
         "matches": matches,
-        "company_count": sum(1 for m in matches if m["type"] == "company"),
-        "surname_count": sum(1 for m in matches if m["type"] == "surname"),
+        "type_counts": type_counts,
     }
