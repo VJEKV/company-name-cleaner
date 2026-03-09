@@ -23,10 +23,10 @@ pip install pyinstaller -q
 python generate_stamps.py
 
 echo.
-echo Сборка .exe (это займёт 1-3 минуты)...
+echo Сборка .exe (это займет 1-3 минуты)...
 echo.
 
-pyinstaller --onefile --windowed --name "TitanCleaner" --add-data "assets\stamps;assets\stamps" main.py
+pyinstaller --onefile --windowed --name TitanCleaner --add-data assets\stamps;assets\stamps main.py
 
 if %errorlevel% equ 0 (
     echo.
