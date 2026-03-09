@@ -1,76 +1,75 @@
 @echo off
 chcp 65001 >nul 2>&1
-title Company Name Cleaner
+title Titan Cleaner v3.0
 
 echo ============================================
-echo   Company Name Cleaner - Первый запуск
+echo   Titan Cleaner v3.0
 echo ============================================
 echo.
 
-:: Проверяем Python
+:: Check Python
 where python >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ОШИБКА] Python не найден!
+    echo [ERROR] Python not found!
     echo.
-    echo Скачайте Python 3.11+ с https://www.python.org/downloads/
-    echo При установке обязательно отметьте "Add Python to PATH"
+    echo Download Python 3.11+ from https://www.python.org/downloads/
+    echo Check "Add Python to PATH" during install
     echo.
     pause
     exit /b 1
 )
 
-:: Проверяем версию Python
+:: Check Python version
 python --version 2>&1 | findstr /R "3\.\(1[1-9]\|[2-9][0-9]\)" >nul 2>&1
 if %errorlevel% neq 0 (
-    echo [ВНИМАНИЕ] Рекомендуется Python 3.11+
-    echo Текущая версия:
+    echo [WARNING] Python 3.11+ recommended
+    echo Current version:
     python --version
     echo.
 )
 
-:: Создаём venv если нет
+:: Create venv if not exists
 if not exist ".venv" (
-    echo [1/4] Создание виртуального окружения...
+    echo [1/4] Creating virtual environment...
     python -m venv .venv
     if %errorlevel% neq 0 (
-        echo [ОШИБКА] Не удалось создать venv
+        echo [ERROR] Failed to create venv
         pause
         exit /b 1
     )
 )
 
-:: Активируем venv
+:: Activate venv
 call .venv\Scripts\activate.bat
 
-:: Устанавливаем зависимости если нужно
+:: Install dependencies
 if not exist ".venv\installed.flag" (
-    echo [2/4] Установка зависимостей...
+    echo [2/4] Installing dependencies...
     pip install -r requirements.txt -q
     if %errorlevel% neq 0 (
-        echo [ОШИБКА] Не удалось установить зависимости
+        echo [ERROR] Failed to install dependencies
         pause
         exit /b 1
     )
     echo done > .venv\installed.flag
 ) else (
-    echo [2/4] Зависимости уже установлены
+    echo [2/4] Dependencies already installed
 )
 
-:: Генерируем штампы если нет
+:: Generate stamps
 if not exist "assets\stamps\daisy.png" (
-    echo [3/4] Генерация штампов...
+    echo [3/4] Generating stamps...
     python generate_stamps.py
 ) else (
-    echo [3/4] Штампы уже созданы
+    echo [3/4] Stamps ready
 )
 
-echo [4/4] Запуск приложения...
+echo [4/4] Starting app...
 echo.
 python main.py
 
-:: Если приложение закрылось с ошибкой
 if %errorlevel% neq 0 (
     echo.
-    echo [ОШИБКА] Приложение завершилось с ошибкой
+    echo [ERROR] App crashed
     pause
 )
