@@ -1,43 +1,41 @@
 @echo off
 chcp 65001 >nul 2>&1
-title Сборка TitanCleaner.exe
+title Build TitanCleaner.exe
 
 echo ============================================
-echo   Сборка TitanCleaner.exe
+echo   Build TitanCleaner.exe
 echo ============================================
 echo.
 
-:: Активируем venv
 if exist ".venv\Scripts\activate.bat" (
     call .venv\Scripts\activate.bat
 ) else (
-    echo Сначала запустите ЗАПУСТИТЬ.bat для установки зависимостей
+    echo Run ZAPUSTIT.bat first to install dependencies
     pause
     exit /b 1
 )
 
-:: Устанавливаем PyInstaller
 pip install pyinstaller -q
 
-:: Генерируем штампы
 python generate_stamps.py
 
 echo.
-echo Сборка .exe (это займет 1-3 минуты)...
+echo Building EXE...
 echo.
 
-pyinstaller --onefile --windowed --name TitanCleaner --add-data assets\stamps;assets\stamps main.py
+set ADDDATA=assets\stamps;assets\stamps
+pyinstaller --onefile --windowed --name TitanCleaner --add-data %ADDDATA% main.py
 
 if %errorlevel% equ 0 (
     echo.
     echo ============================================
-    echo   ГОТОВО! Файл: dist\TitanCleaner.exe
+    echo   DONE! File: dist\TitanCleaner.exe
     echo ============================================
     echo.
     explorer dist
 ) else (
     echo.
-    echo [ОШИБКА] Сборка не удалась
+    echo BUILD FAILED
 )
 
 pause
