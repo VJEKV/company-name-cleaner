@@ -406,6 +406,15 @@ RE_PHONE_BARE = re.compile(
 RE_PHONE_8 = re.compile(
     r'(?<!\d)(8[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2})(?!\d)'
 )
+# Локальные телефоны: (86559) 2-50-08, (495) 123-45-67
+RE_PHONE_LOCAL = re.compile(
+    r'(?:тел\.?|телефон|моб\.?|факс|т\.)\s*:?\s*'
+    r'(\(\d{4,5}\)\s*\d[\d\s-]{4,12}\d)',
+    re.IGNORECASE,
+)
+RE_PHONE_LOCAL_BARE = re.compile(
+    r'(?<!\d)(\(\d{4,5}\)\s*\d[\d\s-]{4,12}\d)(?!\d)'
+)
 
 # Email
 RE_EMAIL = re.compile(
@@ -426,6 +435,39 @@ RE_ADDRESS = re.compile(
     r'(?:,?\s*д(?:ом)?[-.\s]*\d+[а-яА-Я/]*)'
     r'(?:,?\s*(?:корп|стр|к)[-.\s]*\d+[а-яА-Я]*)?'
     r'(?:,?\s*(?:кв|оф|офис|пом|каб|комн|этаж)[-.\s]*\d+)?',
+    re.IGNORECASE,
+)
+
+# Адрес без "д." — ул. Розы Люксембург, 1
+RE_ADDRESS_SHORT = re.compile(
+    r'(?:ул(?:ица)?[-.\s]+|пр(?:оспект)?[-.\s]+|пер(?:еулок)?[-.\s]+|'
+    r'б(?:ульвар)?[-.\s]+|(?:ш(?:оссе)?[-.\s]+)|наб(?:ережная)?[-.\s]+|'
+    r'пл(?:ощадь)?[-.\s]+|мкр[-.\s]*н?[-.\s]+|проезд[-.\s]+)'
+    r'[А-ЯЁа-яё][А-ЯЁа-яё0-9\s./-]{2,40}?'
+    r',\s*\d+[а-яА-Я/]*'
+    r'(?:,?\s*(?:корп|стр|к)[-.\s]*\d+[а-яА-Я]*)?'
+    r'(?:,?\s*(?:кв|оф|офис|пом|каб|комн|этаж)[-.\s]*\d+)?',
+    re.IGNORECASE,
+)
+
+# Полный адрес с индексом: 356808, Россия, Ставропольский край, г. Буденновск, ул. Розы Люксембург, 1
+RE_ADDRESS_FULL = re.compile(
+    r'(?<!\d)\d{6}\s*,?\s*'                         # индекс
+    r'(?:Росси[яи],?\s*)?'                          # Россия (опц.)
+    r'(?:[А-ЯЁа-яё]+\s+(?:край|обл(?:асть)?|респ(?:ублика)?|округ|АО),?\s*)?'  # регион
+    r'(?:(?:г\.|город|гор\.)\s*[А-ЯЁа-яё][-А-ЯЁа-яё\s]+,?\s*)?'  # город
+    r'(?:(?:ул(?:ица)?|пр|пер|б-р|ш|наб|пл|проезд|мкр)[-.\s]+[А-ЯЁа-яё0-9][-А-ЯЁа-яё0-9\s./]+?'
+    r'(?:,?\s*(?:д(?:ом)?[-.\s]*)?)\d+[а-яА-Я/]*)?'
+    r'(?:,?\s*(?:корп|стр|к)[-.\s]*\d+)?'
+    r'(?:,?\s*(?:кв|оф|офис|пом|каб|комн|этаж)[-.\s]*\d+)?',
+    re.IGNORECASE,
+)
+
+# Юридический/фактический адрес — ловим всё до конца строки
+RE_ADDRESS_LABEL = re.compile(
+    r'(?:юридический|фактический|почтовый|адрес\s+местонахождения|'
+    r'место\s+нахождения|адрес\s+регистрации)\s*(?:адрес)?\s*:?\s*'
+    r'([^\n]{10,120})',
     re.IGNORECASE,
 )
 
@@ -848,7 +890,7 @@ def detect_contacts(text: str) -> list[DetectedEntity]:
     """Обнаруживает телефоны и email."""
     entities = []
 
-    for pattern in (RE_PHONE, RE_PHONE_BARE, RE_PHONE_8):
+    for pattern in (RE_PHONE, RE_PHONE_BARE, RE_PHONE_8, RE_PHONE_LOCAL, RE_PHONE_LOCAL_BARE):
         for m in pattern.finditer(text):
             entities.append(DetectedEntity(
                 start=m.start(), end=m.end(), text=m.group(0),
@@ -872,6 +914,29 @@ def detect_addresses(text: str) -> list[DetectedEntity]:
     """Обнаруживает почтовые адреса."""
     entities = []
 
+    # Полные адреса с индексом (самые длинные — первыми)
+    for m in RE_ADDRESS_FULL.finditer(text):
+        addr = m.group(0).strip().rstrip(',')
+        if len(addr) < 10:
+            continue
+        entities.append(DetectedEntity(
+            start=m.start(), end=m.start() + len(addr), text=addr,
+            entity_type=ENTITY_ADDRESS,
+            replacement=_auto_replacement(ENTITY_ADDRESS, addr),
+        ))
+
+    # Адрес по метке "Юридический адрес: ..."
+    for m in RE_ADDRESS_LABEL.finditer(text):
+        addr = m.group(1).strip().rstrip(',').rstrip('.')
+        if len(addr) < 10:
+            continue
+        entities.append(DetectedEntity(
+            start=m.start(1), end=m.start(1) + len(addr), text=addr,
+            entity_type=ENTITY_ADDRESS,
+            replacement=_auto_replacement(ENTITY_ADDRESS, addr),
+        ))
+
+    # Обычные адреса (ул. X, д. Y)
     for m in RE_ADDRESS.finditer(text):
         addr = m.group(0).strip().rstrip(',')
         if len(addr) < 5:
@@ -882,6 +947,18 @@ def detect_addresses(text: str) -> list[DetectedEntity]:
             replacement=_auto_replacement(ENTITY_ADDRESS, addr),
         ))
 
+    # Короткие адреса (ул. X, 1) — без "д."
+    for m in RE_ADDRESS_SHORT.finditer(text):
+        addr = m.group(0).strip().rstrip(',')
+        if len(addr) < 5:
+            continue
+        entities.append(DetectedEntity(
+            start=m.start(), end=m.start() + len(addr), text=addr,
+            entity_type=ENTITY_ADDRESS,
+            replacement=_auto_replacement(ENTITY_ADDRESS, addr),
+        ))
+
+    # Почтовый индекс отдельно
     for m in RE_INDEX.finditer(text):
         entities.append(DetectedEntity(
             start=m.start(), end=m.start() + 6, text=m.group(1),
@@ -999,8 +1076,36 @@ def _detect_in_docx(filepath: str) -> dict:
     }
 
 
+def _ocr_page(page) -> str:
+    """OCR страницы PDF через tesseract (для сканов)."""
+    try:
+        import pytesseract
+        from PIL import Image
+        import io
+
+        # Рендерим страницу в изображение (300 DPI)
+        pix = page.get_pixmap(dpi=300)
+        img_data = pix.tobytes("png")
+        img = Image.open(io.BytesIO(img_data))
+
+        # OCR с русским языком
+        text = pytesseract.image_to_string(img, lang='rus+eng')
+        return text
+    except Exception:
+        return ""
+
+
+def _is_scanned_page(page) -> bool:
+    """Определяет, является ли страница сканом (мало текста, есть изображения)."""
+    text = page.get_text().strip()
+    # Если текста мало (менее 50 символов) — скорее всего скан
+    if len(text) < 50:
+        return True
+    return False
+
+
 def _detect_in_pdf(filepath: str) -> dict:
-    """Автодетекция в PDF-файле."""
+    """Автодетекция в PDF-файле. Поддерживает текстовые PDF и сканы (OCR)."""
     import fitz
 
     try:
@@ -1019,10 +1124,19 @@ def _detect_in_pdf(filepath: str) -> dict:
     all_entities = []
     full_text_parts = []
     offset = 0
+    used_ocr = False
 
     for page_num in range(len(doc)):
         page = doc[page_num]
         page_text = page.get_text()
+
+        # Если страница выглядит как скан — пробуем OCR
+        if _is_scanned_page(page):
+            ocr_text = _ocr_page(page)
+            if ocr_text.strip():
+                page_text = ocr_text
+                used_ocr = True
+
         pages[page_num + 1] = page_text
 
         # Детектим на каждой странице отдельно
@@ -1053,6 +1167,7 @@ def _detect_in_pdf(filepath: str) -> dict:
         "pages": pages,
         "text": full_text,
         "by_type": by_type,
+        "used_ocr": used_ocr,
         "error": None,
     }
 

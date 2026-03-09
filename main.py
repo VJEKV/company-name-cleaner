@@ -936,11 +936,12 @@ class App(tk.Tk):
             all_results.append(result)
             n = len(result.get("entities", []))
             fname = Path(filepath).name
+            ocr_tag = " [OCR]" if result.get("used_ocr") else ""
             if result.get("error"):
                 self.after(0, lambda m=f"X {fname}: {result['error']}":
                            self._log(m, "error"))
             else:
-                self.after(0, lambda m=f"  {fname}: найдено {n} сущностей":
+                self.after(0, lambda m=f"  {fname}: найдено {n} сущностей{ocr_tag}":
                            self._log(m, "info"))
 
         self.after(0, lambda: self._show_auto_detect_preview(all_results))
