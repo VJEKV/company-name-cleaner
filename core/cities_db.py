@@ -252,11 +252,32 @@ RUSSIAN_CITIES: frozenset[str] = frozenset({
 })
 
 
+def _normalize_yo(s: str) -> str:
+    """Заменяет ё→е и Ё→Е для нечувствительного сравнения."""
+    return s.replace('ё', 'е').replace('Ё', 'Е')
+
+
+# Нормализованный индекс: "Буденновск" → "Будённовск"
+_CITIES_YO_MAP: dict[str, str] = {_normalize_yo(c): c for c in RUSSIAN_CITIES}
+
+
 def get_all_cities() -> frozenset[str]:
     """Возвращает множество всех городов."""
     return RUSSIAN_CITIES
 
 
 def is_city(name: str) -> bool:
-    """Проверяет, является ли слово названием города."""
-    return name.strip() in RUSSIAN_CITIES
+    """Проверяет, является ли слово названием города (нечувствительно к ё/е)."""
+    name = name.strip()
+    if name in RUSSIAN_CITIES:
+        return True
+    return _normalize_yo(name) in _CITIES_YO_MAP
+
+
+def find_city(name: str) -> str | None:
+    """Находит каноническое название города (с ё) по написанию с е."""
+    name = name.strip()
+    if name in RUSSIAN_CITIES:
+        return name
+    norm = _normalize_yo(name)
+    return _CITIES_YO_MAP.get(norm)

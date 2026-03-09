@@ -14,7 +14,7 @@
 import re
 from dataclasses import dataclass, field
 
-from core.cities_db import RUSSIAN_CITIES
+from core.cities_db import RUSSIAN_CITIES, is_city, find_city, _normalize_yo, _CITIES_YO_MAP
 from core.whitelist import is_whitelisted_org, is_whitelisted_in_context
 
 
@@ -351,7 +351,7 @@ RE_ORG_QUOTED = re.compile(
 # Орг. форма полная + «Название»
 _ORG_FULL_ALT = '|'.join(re.escape(f) for f in ORG_FORMS_FULL)
 RE_ORG_FULL_QUOTED = re.compile(
-    rf'(?:{_ORG_FULL_ALT})\s*{_QUOTE_OPEN}([^»"\u201d\'"]+){_QUOTE_CLOSE}',
+    rf'(?:{_ORG_FULL_ALT})[\s_]*{_QUOTE_OPEN}([^»"\u201d\'"]+){_QUOTE_CLOSE}',
     re.IGNORECASE,
 )
 
@@ -557,7 +557,7 @@ def _is_likely_surname(word: str) -> bool:
         return False
     if word in FALSE_POSITIVE_SURNAMES:
         return False
-    if word in RUSSIAN_CITIES:
+    if is_city(word):
         return False
     if word in ALL_FIRST_NAMES:
         return False
@@ -794,49 +794,59 @@ def detect_organizations(text: str) -> list[DetectedEntity]:
 
 
 def detect_cities(text: str) -> list[DetectedEntity]:
-    """Обнаруживает названия городов из справочника."""
+    """Обнаруживает названия городов из справочника (нечувствительно к ё/е)."""
     entities = []
 
     # г. Москва, город Москва
     for m in RE_CITY_PREFIX.finditer(text):
         city_name = m.group(1).strip()
         full = m.group(0)
-        if city_name in RUSSIAN_CITIES:
+        canonical = find_city(city_name)
+        if canonical:
             entities.append(DetectedEntity(
                 start=m.start(), end=m.end(), text=full,
                 entity_type=ENTITY_CITY,
-                replacement=_auto_replacement(ENTITY_CITY, city_name),
+                replacement=_auto_replacement(ENTITY_CITY, canonical),
                 confidence=0.95,
             ))
 
     # Города без префикса — только в контексте адреса/реквизитов
+    # Ищем и с ё, и с е
+    checked_cities = set()
     for city in RUSSIAN_CITIES:
-        for m in re.finditer(r'\b' + re.escape(city) + r'\b', text):
-            # Проверяем контекст: рядом должен быть адрес или индекс
-            ctx_start = max(0, m.start() - 30)
-            ctx_end = min(len(text), m.end() + 30)
-            context = text[ctx_start:ctx_end].lower()
+        variants = {city}
+        # Добавляем вариант с е вместо ё
+        city_no_yo = _normalize_yo(city)
+        if city_no_yo != city:
+            variants.add(city_no_yo)
+        for variant in variants:
+            if variant in checked_cities:
+                continue
+            checked_cities.add(variant)
+            for m in re.finditer(r'\b' + re.escape(variant) + r'\b', text):
+                ctx_start = max(0, m.start() - 30)
+                ctx_end = min(len(text), m.end() + 30)
+                context = text[ctx_start:ctx_end].lower()
 
-            in_address_ctx = any(marker in context for marker in (
-                'адрес', 'ул.', 'ул ', 'улица', 'пр.', 'проспект',
-                'пер.', 'переулок', 'обл.', 'область', 'край',
-                'респ', 'район', 'индекс', ',', 'г.', 'город',
-            ))
+                in_address_ctx = any(marker in context for marker in (
+                    'адрес', 'ул.', 'ул ', 'улица', 'пр.', 'проспект',
+                    'пер.', 'переулок', 'обл.', 'область', 'край',
+                    'респ', 'район', 'индекс', ',', 'г.', 'город',
+                ))
 
-            if in_address_ctx:
-                # Проверяем что не уже найдено с префиксом
-                already = False
-                for e in entities:
-                    if m.start() >= e.start and m.end() <= e.end:
-                        already = True
-                        break
-                if not already:
-                    entities.append(DetectedEntity(
-                        start=m.start(), end=m.end(), text=city,
-                        entity_type=ENTITY_CITY,
-                        replacement=_auto_replacement(ENTITY_CITY, city),
-                        confidence=0.8,
-                    ))
+                if in_address_ctx:
+                    already = False
+                    for e in entities:
+                        if m.start() >= e.start and m.end() <= e.end:
+                            already = True
+                            break
+                    if not already:
+                        entities.append(DetectedEntity(
+                            start=m.start(), end=m.end(), text=variant,
+                            entity_type=ENTITY_CITY,
+                            replacement=_auto_replacement(ENTITY_CITY, city),
+                            confidence=0.8,
+                        ))
 
     return entities
 
