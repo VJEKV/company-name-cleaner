@@ -292,8 +292,40 @@ class App(tk.Tk):
 
         pad = {"padx": 10, "pady": 3}
 
-        # ── Секция: Параметры для замены ──
-        self._section_label("Параметры для замены")
+        # ── Секция: АВТОПОИСК (вверху) ──
+        auto_frame = ttk.LabelFrame(
+            self.main_frame,
+            text="  АВТОМАТИЧЕСКИЙ РЕЖИМ  ",
+            padding=8,
+        )
+        auto_frame.pack(fill="x", padx=10, pady=(10, 5))
+
+        auto_desc = ttk.Label(
+            auto_frame,
+            text="Автоматический поиск всех ФИО, организаций, "
+                 "реквизитов, адресов, телефонов, email",
+            wraplength=850,
+            foreground="gray",
+        )
+        auto_desc.pack(anchor="w")
+
+        auto_btns = ttk.Frame(auto_frame)
+        auto_btns.pack(fill="x", pady=(5, 0))
+        ttk.Button(
+            auto_btns, text="АВТОПОИСК",
+            command=self._auto_detect_start,
+        ).pack(side="left", padx=5)
+        ttk.Button(
+            auto_btns, text="АВТО-ЗАМЕНА",
+            command=self._auto_replace_start,
+        ).pack(side="left", padx=5)
+
+        ttk.Separator(self.main_frame, orient="horizontal").pack(
+            fill="x", padx=10, pady=(10, 0)
+        )
+
+        # ── Секция: Параметры для замены (ручной режим) ──
+        self._section_label("Ручной режим")
 
         # Контейнер для динамических полей
         self.fields_container = ttk.Frame(self.main_frame)
@@ -411,16 +443,7 @@ class App(tk.Tk):
         )
         self.btn_cancel.pack(side="left", padx=5)
 
-        # ── Автопоиск ──
-        auto_row = ttk.Frame(self.main_frame)
-        auto_row.pack(fill="x", pady=(0, 10), padx=10)
-        ttk.Separator(auto_row, orient="horizontal").pack(fill="x", pady=5)
-        ttk.Button(auto_row, text="АВТОПОИСК",
-                   command=self._auto_detect_start).pack(side="left", padx=5)
-        ttk.Button(auto_row, text="АВТО-ЗАМЕНА",
-                   command=self._auto_replace_start).pack(side="left", padx=5)
-        ttk.Label(auto_row, text="(автоматический поиск всех ПД и реквизитов)",
-                  foreground="gray").pack(side="left", padx=10)
+        # (автопоиск перенесён наверх)
 
         # ── Статус-бар ──
         self.status_var = tk.StringVar(value="Готов к работе")
