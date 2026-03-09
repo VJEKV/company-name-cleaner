@@ -759,6 +759,37 @@ def detect_organizations(text: str) -> list[DetectedEntity]:
             confidence=0.9,
         ))
 
+    # Короткие названия: если нашли "ПАО «ЛУКОЙЛ»", ищем "ЛУКОЙЛ" отдельно
+    short_names: dict[str, str] = {}  # short_name -> replacement
+    for e in entities:
+        # Извлекаем название из кавычек
+        qm = re.search(r'[«""\']([^»""\'"]+)[»""\']', e.text)
+        if qm:
+            name = qm.group(1).strip()
+            if len(name) >= 3 and name not in short_names:
+                short_names[name] = e.replacement
+
+    found_ranges = {(e.start, e.end) for e in entities}
+    for name, repl in short_names.items():
+        for m in re.finditer(r'\b' + re.escape(name) + r'\b', text):
+            # Пропускаем если уже покрыто другой сущностью
+            overlaps = False
+            for (s, e) in found_ranges:
+                if m.start() < e and m.end() > s:
+                    overlaps = True
+                    break
+            if overlaps:
+                continue
+            if is_whitelisted_org(name):
+                continue
+            entities.append(DetectedEntity(
+                start=m.start(), end=m.end(), text=name,
+                entity_type=ENTITY_ORGANIZATION,
+                replacement=repl,
+                confidence=0.85,
+            ))
+            found_ranges.add((m.start(), m.end()))
+
     return entities
 
 
