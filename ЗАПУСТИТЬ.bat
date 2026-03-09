@@ -7,6 +7,19 @@ echo   Titan Cleaner v3.0
 echo ============================================
 echo.
 
+:: Clean old cache to avoid stale bytecode
+if exist "__pycache__" rmdir /s /q __pycache__
+if exist "core\__pycache__" rmdir /s /q core\__pycache__
+
+:: Force reinstall if upgrading from old version
+if exist ".venv\installed.flag" (
+    findstr /c:"v3" ".venv\installed.flag" >nul 2>&1
+    if %errorlevel% neq 0 (
+        echo Upgrading from old version, reinstalling...
+        del ".venv\installed.flag"
+    )
+)
+
 :: Check Python
 where python >nul 2>&1
 if %errorlevel% neq 0 (
@@ -17,15 +30,6 @@ if %errorlevel% neq 0 (
     echo.
     pause
     exit /b 1
-)
-
-:: Check Python version
-python --version 2>&1 | findstr /R "3\.\(1[1-9]\|[2-9][0-9]\)" >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [WARNING] Python 3.11+ recommended
-    echo Current version:
-    python --version
-    echo.
 )
 
 :: Create venv if not exists
@@ -51,9 +55,9 @@ if not exist ".venv\installed.flag" (
         pause
         exit /b 1
     )
-    echo done > .venv\installed.flag
+    echo v3 > .venv\installed.flag
 ) else (
-    echo [2/4] Dependencies already installed
+    echo [2/4] Dependencies OK
 )
 
 :: Generate stamps
@@ -61,15 +65,15 @@ if not exist "assets\stamps\daisy.png" (
     echo [3/4] Generating stamps...
     python generate_stamps.py
 ) else (
-    echo [3/4] Stamps ready
+    echo [3/4] Stamps OK
 )
 
-echo [4/4] Starting app...
+echo [4/4] Starting Titan Cleaner v3.0...
 echo.
 python main.py
 
 if %errorlevel% neq 0 (
     echo.
-    echo [ERROR] App crashed
+    echo [ERROR] App crashed. Details above.
     pause
 )
