@@ -37,6 +37,15 @@ from core.utils import (
     ensure_output_dir,
     format_file_size,
 )
+from core.auto_detect import (
+    auto_detect_all,
+    auto_detect_in_file,
+    DetectedEntity,
+    ENTITY_TYPE_NAMES,
+    get_type_name,
+    _reset_counters,
+    _replacement_cache,
+)
 
 APP_TITLE = "Titan Cleaner v2.0"
 WINDOW_WIDTH = 920
@@ -401,6 +410,17 @@ class App(tk.Tk):
             action_row, text="Отмена", command=self._cancel, state="disabled"
         )
         self.btn_cancel.pack(side="left", padx=5)
+
+        # ── Автопоиск ──
+        auto_row = ttk.Frame(self.main_frame)
+        auto_row.pack(fill="x", pady=(0, 10), padx=10)
+        ttk.Separator(auto_row, orient="horizontal").pack(fill="x", pady=5)
+        ttk.Button(auto_row, text="АВТОПОИСК",
+                   command=self._auto_detect_start).pack(side="left", padx=5)
+        ttk.Button(auto_row, text="АВТО-ЗАМЕНА",
+                   command=self._auto_replace_start).pack(side="left", padx=5)
+        ttk.Label(auto_row, text="(автоматический поиск всех ПД и реквизитов)",
+                  foreground="gray").pack(side="left", padx=10)
 
         # ── Статус-бар ──
         self.status_var = tk.StringVar(value="Готов к работе")
@@ -872,6 +892,432 @@ class App(tk.Tk):
                 text.insert(tk.END, f"  Ошибка: {e}\n")
 
         text.configure(state="disabled")
+
+    # ── Auto-detect ─────────────────────────────────────────
+
+    def _auto_detect_start(self):
+        """Запускает автодетекцию в отдельном потоке."""
+        if not self.files:
+            messagebox.showwarning("Внимание", "Добавьте файлы для анализа.")
+            return
+        self._log("Автопоиск запущен...", "info")
+        self.status_var.set("Автопоиск...")
+        thread = threading.Thread(target=self._auto_detect_worker, daemon=True)
+        thread.start()
+
+    def _auto_detect_worker(self):
+        """Фоновая задача автодетекции."""
+        all_results = []
+        for filepath in self.files:
+            result = auto_detect_in_file(filepath)
+            all_results.append(result)
+            n = len(result.get("entities", []))
+            fname = Path(filepath).name
+            if result.get("error"):
+                self.after(0, lambda m=f"X {fname}: {result['error']}":
+                           self._log(m, "error"))
+            else:
+                self.after(0, lambda m=f"  {fname}: найдено {n} сущностей":
+                           self._log(m, "info"))
+
+        self.after(0, lambda: self._show_auto_detect_preview(all_results))
+        self.after(0, lambda: self.status_var.set("Автопоиск завершён"))
+
+    def _show_auto_detect_preview(self, all_results: list[dict]):
+        """Показывает окно предпросмотра с маркерной подсветкой."""
+        win = tk.Toplevel(self)
+        win.title("Автопоиск — результаты")
+        win.geometry("950x700")
+        win.minsize(700, 500)
+
+        # Сохраняем результаты для авто-замены
+        self._last_auto_results = all_results
+
+        # ── Сводка ──
+        summary_frame = ttk.LabelFrame(win, text="  Сводка  ", padding=5)
+        summary_frame.pack(fill="x", padx=10, pady=5)
+
+        # Подсчёт по типам (глобально)
+        global_counts = {}
+        total = 0
+        for res in all_results:
+            for e in res.get("entities", []):
+                global_counts[e.entity_type] = global_counts.get(e.entity_type, 0) + 1
+                total += 1
+
+        summary_text = f"Всего найдено: {total}   |   "
+        parts = []
+        for etype, count in sorted(global_counts.items(), key=lambda x: -x[1]):
+            parts.append(f"{get_type_name(etype)}: {count}")
+        summary_text += "  |  ".join(parts)
+        ttk.Label(summary_frame, text=summary_text, wraplength=900).pack(anchor="w")
+
+        # ── Список найденного по типам ──
+        paned = ttk.PanedWindow(win, orient="horizontal")
+        paned.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Левая панель: список по категориям
+        left_frame = ttk.Frame(paned)
+        paned.add(left_frame, weight=1)
+
+        ttk.Label(left_frame, text="Найденные сущности",
+                  font=("", 10, "bold")).pack(anchor="w", padx=5)
+
+        list_text = scrolledtext.ScrolledText(
+            left_frame, width=35, wrap="word", state="normal"
+        )
+        list_text.pack(fill="both", expand=True, padx=5, pady=5)
+        list_text.tag_configure("header", font=("", 9, "bold"), foreground="#333")
+        list_text.tag_configure("item", foreground="#555")
+
+        for etype in sorted(global_counts.keys(),
+                            key=lambda t: global_counts.get(t, 0), reverse=True):
+            type_name = get_type_name(etype)
+            count = global_counts[etype]
+            list_text.insert(tk.END, f"\n{type_name} ({count}):\n", "header")
+
+            seen = set()
+            for res in all_results:
+                fname = Path(res["filepath"]).name
+                for e in res.get("entities", []):
+                    if e.entity_type == etype:
+                        key = e.text.strip()
+                        if key not in seen:
+                            seen.add(key)
+                            list_text.insert(
+                                tk.END,
+                                f"  {key}  →  {e.replacement}\n",
+                                "item",
+                            )
+        list_text.configure(state="disabled")
+
+        # Правая панель: текст документа с подсветкой
+        right_frame = ttk.Frame(paned)
+        paned.add(right_frame, weight=2)
+
+        # Выбор файла
+        file_select_frame = ttk.Frame(right_frame)
+        file_select_frame.pack(fill="x", padx=5, pady=2)
+        ttk.Label(file_select_frame, text="Файл:").pack(side="left")
+        file_names = [Path(r["filepath"]).name for r in all_results]
+        file_var = tk.StringVar(value=file_names[0] if file_names else "")
+        file_combo = ttk.Combobox(
+            file_select_frame, textvariable=file_var,
+            values=file_names, state="readonly", width=40
+        )
+        file_combo.pack(side="left", padx=5)
+
+        ttk.Label(right_frame, text="Текст документа (маркер = найденное)",
+                  font=("", 10, "bold")).pack(anchor="w", padx=5)
+
+        doc_text = scrolledtext.ScrolledText(
+            right_frame, wrap="word", state="normal",
+            font=("Consolas", 10),
+        )
+        doc_text.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Тег маркера — жёлтый фон
+        doc_text.tag_configure("marker", background="#FFFF00")
+        doc_text.tag_configure("marker_surname", background="#FFFF00")
+        doc_text.tag_configure("marker_org", background="#FFD700")
+        doc_text.tag_configure("marker_city", background="#98FB98")
+        doc_text.tag_configure("marker_requisite", background="#87CEEB")
+        doc_text.tag_configure("marker_contact", background="#DDA0DD")
+        doc_text.tag_configure("marker_address", background="#F0E68C")
+        doc_text.tag_configure("marker_passport", background="#FFA07A")
+        doc_text.tag_configure("page_header", font=("", 10, "bold"),
+                               foreground="blue")
+
+        MARKER_TAGS = {
+            "surname": "marker_surname",
+            "organization": "marker_org",
+            "city": "marker_city",
+            "inn": "marker_requisite",
+            "ogrn": "marker_requisite",
+            "kpp": "marker_requisite",
+            "bik": "marker_requisite",
+            "account": "marker_requisite",
+            "snils": "marker_passport",
+            "passport": "marker_passport",
+            "phone": "marker_contact",
+            "email": "marker_contact",
+            "address": "marker_address",
+        }
+
+        def show_file_preview(event=None):
+            """Показывает текст выбранного файла с подсветкой."""
+            doc_text.configure(state="normal")
+            doc_text.delete("1.0", tk.END)
+
+            fname = file_var.get()
+            result = None
+            for r in all_results:
+                if Path(r["filepath"]).name == fname:
+                    result = r
+                    break
+            if not result:
+                doc_text.configure(state="disabled")
+                return
+
+            pages = result.get("pages", {})
+            entities = result.get("entities", [])
+            full_text = result.get("text", "")
+
+            if not pages:
+                doc_text.insert(tk.END, full_text or "(нет текста)")
+                doc_text.configure(state="disabled")
+                return
+
+            # Показываем ~3 страницы
+            max_pages = 3
+            shown = 0
+            text_offset = 0  # глобальное смещение в full_text
+
+            for page_num in sorted(pages.keys()):
+                if shown >= max_pages:
+                    doc_text.insert(
+                        tk.END,
+                        f"\n... ещё {len(pages) - max_pages} стр. ...\n",
+                        "page_header",
+                    )
+                    break
+
+                page_text = pages[page_num]
+                if not page_text.strip():
+                    text_offset += len(page_text)
+                    continue
+
+                doc_text.insert(
+                    tk.END,
+                    f"\n── Страница {page_num} ──\n",
+                    "page_header",
+                )
+
+                # Находим сущности на этой странице
+                page_start = text_offset
+                page_end = text_offset + len(page_text)
+                page_entities = [
+                    e for e in entities
+                    if e.start >= page_start and e.end <= page_end
+                ]
+
+                # Вставляем текст с подсветкой
+                pos = 0
+                insert_start = doc_text.index(tk.END)
+                for e in sorted(page_entities, key=lambda x: x.start):
+                    local_start = e.start - page_start
+                    local_end = e.end - page_start
+
+                    if local_start < pos:
+                        continue
+
+                    # Текст до сущности
+                    if local_start > pos:
+                        doc_text.insert(tk.END, page_text[pos:local_start])
+
+                    # Сущность с маркером
+                    tag = MARKER_TAGS.get(e.entity_type, "marker")
+                    doc_text.insert(tk.END, page_text[local_start:local_end], tag)
+                    pos = local_end
+
+                # Остаток текста
+                if pos < len(page_text):
+                    doc_text.insert(tk.END, page_text[pos:])
+
+                text_offset += len(page_text)
+                shown += 1
+
+            doc_text.configure(state="disabled")
+
+        file_combo.bind("<<ComboboxSelected>>", show_file_preview)
+        # Показать первый файл сразу
+        if all_results:
+            show_file_preview()
+
+        # ── Легенда цветов ──
+        legend_frame = ttk.Frame(win)
+        legend_frame.pack(fill="x", padx=10, pady=2)
+        legends = [
+            ("ФИО", "#FFFF00"), ("Организации", "#FFD700"),
+            ("Города", "#98FB98"), ("Реквизиты", "#87CEEB"),
+            ("Контакты", "#DDA0DD"), ("Адреса", "#F0E68C"),
+            ("Паспорт/СНИЛС", "#FFA07A"),
+        ]
+        for name, color in legends:
+            lbl = tk.Label(legend_frame, text=f" {name} ", bg=color,
+                           font=("", 8), padx=3)
+            lbl.pack(side="left", padx=2)
+
+        # ── Кнопки ──
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(fill="x", padx=10, pady=10)
+
+        def do_auto_replace():
+            win.destroy()
+            self._auto_replace_from_results(all_results)
+
+        ttk.Button(btn_frame, text="АВТО-ЗАМЕНА (заменить всё)",
+                   command=do_auto_replace).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Закрыть",
+                   command=win.destroy).pack(side="right", padx=5)
+
+    def _auto_replace_start(self):
+        """Авто-замена без предпросмотра — сразу заменяет всё."""
+        if not self.files:
+            messagebox.showwarning("Внимание", "Добавьте файлы для обработки.")
+            return
+
+        if not messagebox.askyesno(
+            "Авто-замена",
+            "Программа автоматически найдёт и заменит все персональные данные "
+            "и реквизиты во всех файлах.\n\n"
+            "Оригиналы НЕ будут изменены — результаты сохраняются в папку результатов.\n\n"
+            "Продолжить?"
+        ):
+            return
+
+        self._log("Авто-замена: сканирование...", "info")
+        self.status_var.set("Авто-замена...")
+        thread = threading.Thread(target=self._auto_replace_worker, daemon=True)
+        thread.start()
+
+    def _auto_replace_worker(self):
+        """Фоновая задача авто-замены."""
+        all_results = []
+        for filepath in self.files:
+            result = auto_detect_in_file(filepath)
+            all_results.append(result)
+
+        self.after(0, lambda: self._auto_replace_from_results(all_results))
+
+    def _auto_replace_from_results(self, all_results: list[dict]):
+        """Выполняет замену на основе результатов автодетекции."""
+        output_dir = self.output_var.get()
+        try:
+            ensure_output_dir(output_dir)
+        except Exception as e:
+            self._log(f"Ошибка создания папки: {e}", "error")
+            return
+
+        self._save_current_config()
+        self.processing = True
+        self.cancel_flag = False
+        self.btn_process.configure(state="disabled")
+        self.progress["value"] = 0
+        self.progress["maximum"] = len(all_results)
+
+        thread = threading.Thread(
+            target=self._auto_replace_process,
+            args=(all_results, output_dir),
+            daemon=True,
+        )
+        thread.start()
+
+    def _auto_replace_process(self, all_results: list[dict], output_dir: str):
+        """Обрабатывает файлы по результатам автодетекции."""
+        from core.patterns import build_custom_patterns
+
+        total_matches = {}
+
+        for i, result in enumerate(all_results):
+            if self.cancel_flag:
+                self.after(0, lambda: self._log("Отменено.", "warning"))
+                break
+
+            filepath = result["filepath"]
+            filename = Path(filepath).name
+            ext = Path(filepath).suffix.lower()
+            output_path = str(Path(output_dir) / filename)
+
+            if os.path.abspath(filepath) == os.path.abspath(output_path):
+                stem = Path(filepath).stem
+                output_path = str(Path(output_dir) / f"{stem}_cleaned{ext}")
+
+            entities = result.get("entities", [])
+            if not entities:
+                self.after(0, lambda fn=filename: self._log(
+                    f"! {fn} — 0 сущностей", "warning"
+                ))
+                self.after(0, lambda v=i + 1: self.progress.configure(value=v))
+                continue
+
+            self.after(0, lambda fn=filename: self.progress_label.configure(
+                text=f"Авто-замена: {fn}"
+            ))
+
+            # Строим replacement_rules из обнаруженных сущностей
+            replacement_rules = self._entities_to_rules(entities)
+
+            try:
+                if ext == '.docx':
+                    from core.docx_cleaner import clean_docx
+                    res = clean_docx(filepath, output_path, replacement_rules)
+                elif ext == '.pdf':
+                    from core.pdf_cleaner import clean_pdf_text_mode
+                    res = clean_pdf_text_mode(filepath, output_path, replacement_rules)
+                else:
+                    continue
+
+                status = res.get("status", "error")
+                matches = res.get("matches", {})
+                err = res.get("error_message")
+
+                for k, v in matches.items():
+                    total_matches[k] = total_matches.get(k, 0) + v
+                total_file = sum(matches.values()) if isinstance(matches, dict) else 0
+
+                if status == "success":
+                    if total_file > 0:
+                        details = ", ".join(f"{k}: {v}" for k, v in matches.items())
+                        msg = f"OK {filename} — {details}"
+                        self.after(0, lambda m=msg: self._log(m, "success"))
+                    else:
+                        msg = f"! {filename} — 0 замен (сущности не найдены в тексте runs)"
+                        self.after(0, lambda m=msg: self._log(m, "warning"))
+                else:
+                    msg = f"X {filename} — {err}"
+                    self.after(0, lambda m=msg: self._log(m, "error"))
+
+            except Exception as e:
+                msg = f"X {filename} — исключение: {e}"
+                self.after(0, lambda m=msg: self._log(m, "error"))
+                logger.exception(f"Auto-replace error: {filepath}")
+
+            self.after(0, lambda v=i + 1: self.progress.configure(value=v))
+
+        if total_matches:
+            details = ", ".join(f"{k}: {v}" for k, v in total_matches.items())
+            summary = f"Авто-замена завершена. {details}"
+        else:
+            summary = "Авто-замена завершена. Замен не выполнено."
+        self.after(0, lambda: self._log(summary, "info"))
+        self.after(0, lambda: self.progress_label.configure(text=summary))
+        self._finish_processing()
+
+    @staticmethod
+    def _entities_to_rules(entities: list) -> list[dict]:
+        """Преобразует список DetectedEntity в replacement_rules для cleaner."""
+        import re as _re
+        rules = []
+        seen = set()
+
+        for e in entities:
+            text_escaped = _re.escape(e.text)
+            key = (text_escaped, e.replacement)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            pattern = _re.compile(text_escaped, _re.IGNORECASE)
+            rules.append({
+                "patterns": [pattern],
+                "replacement": e.replacement,
+                "type": e.entity_type,
+            })
+
+        # Сортируем от длинных к коротким (приоритет длинным совпадениям)
+        rules.sort(key=lambda r: len(r["patterns"][0].pattern), reverse=True)
+        return rules
 
     # ── Replacement Map ─────────────────────────────────────
 
