@@ -47,7 +47,7 @@ from core.auto_detect import (
     _replacement_cache,
 )
 
-APP_TITLE = "Titan Cleaner v2.0"
+APP_TITLE = "Titan Cleaner v3.0"
 WINDOW_WIDTH = 920
 WINDOW_HEIGHT = 850
 
