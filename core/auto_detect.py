@@ -372,10 +372,28 @@ RE_ACCOUNT = re.compile(
     r'лицевой\s+сч[её]т|л/с)\s*:?\s*(\d{20})\b',
     re.IGNORECASE,
 )
+# С пробелами/разделителями: р/с 408 028 100 000 12345678
+RE_ACCOUNT_SPACED = re.compile(
+    r'(?:р/с|р\.с\.|расч[её]тный\s+сч[её]т|к/с|к\.с\.|корр[.]?\s*сч[её]т|'
+    r'лицевой\s+сч[её]т|л/с)\s*:?\s*'
+    r'(\d{3}[\s.-]\d{2,5}[\s.-]\d{2,5}[\s.-]\d{2,12}(?:[\s.-]\d+)*)\b',
+    re.IGNORECASE,
+)
 # Просто 20 цифр подряд после "счёт" / "счет"
 RE_ACCOUNT_BARE = re.compile(
     r'(?:сч[её]т|№\s*сч[её]та)\s*:?\s*(\d{20})\b',
     re.IGNORECASE,
+)
+# Голые 20-значные номера с типовыми банковскими префиксами (без ключевого слова)
+# 301-302 — корр. счета, 401-408 — клиентские, 423 — депозиты, 407/408 — юр./физ. лица
+_BANK_PREFIXES = r'(?:301|302|401|402|403|404|405|406|407|408|409|410|411|412|413|414|421|422|423|425|430|431|440|441|442|452|453|454|455|456|457|458|459|460|461|462|463|464|465|466|467|468|469|470|471|472|473|474|475)'
+RE_ACCOUNT_BARE_20 = re.compile(
+    r'(?<!\d)(' + _BANK_PREFIXES + r'\d{17})(?!\d)',
+)
+# 20-значные номера с пробелами/точками в банковском контексте
+RE_ACCOUNT_BARE_SPACED = re.compile(
+    r'(?<!\d)(' + _BANK_PREFIXES +
+    r'[\s.]?\d{2}[\s.]?\d{3}[\s.]?\d{1}[\s.]?\d{4}[\s.]?\d{7})(?!\d)',
 )
 
 # СНИЛС: 123-456-789 01 или 12345678901
@@ -495,8 +513,47 @@ RE_ADDRESS_LABEL = re.compile(
     re.IGNORECASE,
 )
 
+# Адрес без индекса, начинающийся с "Россия / РФ, регион, город, ..."
+RE_ADDRESS_COUNTRY = re.compile(
+    r'(?:Росси[яи]|РФ|Российская\s+Федерация)\s*,\s*'
+    r'(?:[А-ЯЁа-яё]+\s+(?:край|обл(?:асть)?|респ(?:ублика)?|округ|АО)\s*,\s*)?'
+    r'(?:(?:г\.|город|гор\.)\s*[А-ЯЁа-яё][-А-ЯЁа-яё\s]+?(?:\s*,\s*))?'
+    r'(?:(?:ул(?:ица)?|пр(?:оспект)?|пер(?:еулок)?|б(?:ульвар)?|ш(?:оссе)?|наб(?:ережная)?|'
+    r'пл(?:ощадь)?|мкр|проезд)[-.\s]+[А-ЯЁа-яё0-9][-А-ЯЁа-яё0-9\s./]+?'
+    r'(?:,?\s*(?:д(?:ом)?[-.\s]*)?)\d+[а-яА-Я/]*)?'
+    r'(?:,?\s*(?:корп|стр|к)[-.\s]*\d+)?'
+    r'(?:,?\s*(?:кв|оф|офис|пом|каб|комн|этаж)[-.\s]*\d+)?',
+    re.IGNORECASE,
+)
+
+# Адрес "г. Город, ул. ..., д. ..." (без индекса, начинается с города)
+RE_ADDRESS_CITY_STREET = re.compile(
+    r'(?:г\.|город|гор\.)\s*[А-ЯЁа-яё][-А-ЯЁа-яё\s]{2,30}?\s*,\s*'
+    r'(?:ул(?:ица)?|пр(?:оспект)?|пер(?:еулок)?|б(?:ульвар)?|ш(?:оссе)?|наб(?:ережная)?|'
+    r'пл(?:ощадь)?|мкр|проезд)[-.\s]+[А-ЯЁа-яё][А-ЯЁа-яё0-9\s./-]{2,40}?'
+    r'(?:,?\s*(?:д(?:ом)?[-.\s]*)?\d+[а-яА-Я/]*)'
+    r'(?:,?\s*(?:корп|стр|к)[-.\s]*\d+[а-яА-Я]*)?'
+    r'(?:,?\s*(?:кв|оф|офис|пом|каб|комн|этаж)[-.\s]*\d+)?',
+    re.IGNORECASE,
+)
+
+# Абонентский ящик / а/я
+RE_ADDRESS_POBOX = re.compile(
+    r'(?:а/я|а\.я\.|абонентский\s+ящик|почтовый\s+ящик)\s*:?\s*(?:№\s*)?(\d+)',
+    re.IGNORECASE,
+)
+
 # Почтовый индекс
 RE_INDEX = re.compile(r'(?<!\d)(\d{6})(?:,?\s+(?:г\.|город|Россия|РФ|обл\.|респ\.))', re.IGNORECASE)
+
+# Полный почтовый адрес: индекс, город (без ул. — напр. "123456, г. Москва")
+RE_ADDRESS_INDEX_CITY = re.compile(
+    r'(?<!\d)(\d{6})\s*,\s*'
+    r'(?:Росси[яи]\s*,\s*)?'
+    r'(?:[А-ЯЁа-яё]+\s+(?:край|обл(?:асть)?|респ(?:ублика)?|округ|АО)\s*,\s*)?'
+    r'(?:г\.|город|гор\.)\s*[А-ЯЁа-яё][-А-ЯЁа-яё\s]*',
+    re.IGNORECASE,
+)
 
 # Город с префиксом (ловит и склонённые формы: г.Буденновске, город Москвы)
 RE_CITY_PREFIX = re.compile(
@@ -974,14 +1031,38 @@ def detect_requisites(text: str) -> list[DetectedEntity]:
             replacement=_auto_replacement(ENTITY_BIK, m.group(1)),
         ))
 
-    for pattern in (RE_ACCOUNT, RE_ACCOUNT_BARE):
+    # Счета с ключевыми словами (высокий приоритет)
+    account_ranges: set[tuple[int, int]] = set()
+    for pattern in (RE_ACCOUNT, RE_ACCOUNT_SPACED, RE_ACCOUNT_BARE):
         for m in pattern.finditer(text):
             full = m.group(0)
+            account_ranges.add((m.start(), m.end()))
             entities.append(DetectedEntity(
                 start=m.start(), end=m.end(), text=full,
                 entity_type=ENTITY_ACCOUNT,
                 replacement=_auto_replacement(ENTITY_ACCOUNT, m.group(1)),
             ))
+
+    # Голые 20-значные номера с банковскими префиксами (без ключевого слова)
+    for pattern in (RE_ACCOUNT_BARE_20, RE_ACCOUNT_BARE_SPACED):
+        for m in pattern.finditer(text):
+            # Пропустить, если уже поймали с ключевым словом
+            overlap = False
+            for (rs, re_) in account_ranges:
+                if not (m.end() <= rs or m.start() >= re_):
+                    overlap = True
+                    break
+            if overlap:
+                continue
+            full = m.group(0)
+            digits_only = re.sub(r'[\s.]', '', m.group(1))
+            if len(digits_only) == 20:
+                entities.append(DetectedEntity(
+                    start=m.start(), end=m.end(), text=full,
+                    entity_type=ENTITY_ACCOUNT,
+                    replacement=_auto_replacement(ENTITY_ACCOUNT, digits_only),
+                    confidence=0.85,
+                ))
 
     return entities
 
@@ -1084,58 +1165,70 @@ def detect_contacts(text: str) -> list[DetectedEntity]:
 def detect_addresses(text: str) -> list[DetectedEntity]:
     """Обнаруживает почтовые адреса."""
     entities = []
+    addr_ranges: set[tuple[int, int]] = set()
+
+    def _add_addr(start: int, end: int, addr_text: str, conf: float = 1.0):
+        # Пропускаем если пересекается с уже найденным адресом
+        for (rs, re_) in addr_ranges:
+            if not (end <= rs or start >= re_):
+                return
+        addr_ranges.add((start, end))
+        entities.append(DetectedEntity(
+            start=start, end=end, text=addr_text,
+            entity_type=ENTITY_ADDRESS,
+            replacement=_auto_replacement(ENTITY_ADDRESS, addr_text),
+            confidence=conf,
+        ))
 
     # Полные адреса с индексом (самые длинные — первыми)
     for m in RE_ADDRESS_FULL.finditer(text):
         addr = m.group(0).strip().rstrip(',')
-        if len(addr) < 10:
-            continue
-        entities.append(DetectedEntity(
-            start=m.start(), end=m.start() + len(addr), text=addr,
-            entity_type=ENTITY_ADDRESS,
-            replacement=_auto_replacement(ENTITY_ADDRESS, addr),
-        ))
+        if len(addr) >= 10:
+            _add_addr(m.start(), m.start() + len(addr), addr)
 
     # Адрес по метке "Юридический адрес: ..."
     for m in RE_ADDRESS_LABEL.finditer(text):
         addr = m.group(1).strip().rstrip(',').rstrip('.')
-        if len(addr) < 10:
-            continue
-        entities.append(DetectedEntity(
-            start=m.start(1), end=m.start(1) + len(addr), text=addr,
-            entity_type=ENTITY_ADDRESS,
-            replacement=_auto_replacement(ENTITY_ADDRESS, addr),
-        ))
+        if len(addr) >= 10:
+            _add_addr(m.start(1), m.start(1) + len(addr), addr)
+
+    # Адрес "Россия, регион, город, улица..." (без индекса)
+    for m in RE_ADDRESS_COUNTRY.finditer(text):
+        addr = m.group(0).strip().rstrip(',')
+        if len(addr) >= 10:
+            _add_addr(m.start(), m.start() + len(addr), addr, 0.9)
+
+    # Адрес "г. Город, ул. ..., д. ..." (без индекса, начинается с города)
+    for m in RE_ADDRESS_CITY_STREET.finditer(text):
+        addr = m.group(0).strip().rstrip(',')
+        if len(addr) >= 10:
+            _add_addr(m.start(), m.start() + len(addr), addr, 0.9)
 
     # Обычные адреса (ул. X, д. Y)
     for m in RE_ADDRESS.finditer(text):
         addr = m.group(0).strip().rstrip(',')
-        if len(addr) < 5:
-            continue
-        entities.append(DetectedEntity(
-            start=m.start(), end=m.start() + len(addr), text=addr,
-            entity_type=ENTITY_ADDRESS,
-            replacement=_auto_replacement(ENTITY_ADDRESS, addr),
-        ))
+        if len(addr) >= 5:
+            _add_addr(m.start(), m.start() + len(addr), addr)
 
     # Короткие адреса (ул. X, 1) — без "д."
     for m in RE_ADDRESS_SHORT.finditer(text):
         addr = m.group(0).strip().rstrip(',')
-        if len(addr) < 5:
-            continue
-        entities.append(DetectedEntity(
-            start=m.start(), end=m.start() + len(addr), text=addr,
-            entity_type=ENTITY_ADDRESS,
-            replacement=_auto_replacement(ENTITY_ADDRESS, addr),
-        ))
+        if len(addr) >= 5:
+            _add_addr(m.start(), m.start() + len(addr), addr)
+
+    # Абонентский ящик (а/я)
+    for m in RE_ADDRESS_POBOX.finditer(text):
+        _add_addr(m.start(), m.end(), m.group(0), 0.95)
+
+    # Индекс + город (без улицы): "123456, г. Москва"
+    for m in RE_ADDRESS_INDEX_CITY.finditer(text):
+        addr = m.group(0).strip().rstrip(',')
+        if len(addr) >= 10:
+            _add_addr(m.start(), m.start() + len(addr), addr, 0.85)
 
     # Почтовый индекс отдельно
     for m in RE_INDEX.finditer(text):
-        entities.append(DetectedEntity(
-            start=m.start(), end=m.start() + 6, text=m.group(1),
-            entity_type=ENTITY_ADDRESS,
-            replacement="000000",
-        ))
+        _add_addr(m.start(), m.start() + 6, m.group(1))
 
     return entities
 
