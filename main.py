@@ -423,7 +423,13 @@ class App(tk.Tk):
         self.progress_label.pack(anchor="w", padx=10)
 
         # ── Лог ──
-        self._section_label("Лог")
+        log_header = ttk.Frame(self.main_frame)
+        log_header.pack(fill="x", padx=10, pady=(5, 0))
+        ttk.Label(log_header, text="Лог", font=("", 10, "bold")).pack(side="left")
+        ttk.Button(log_header, text="Очистить лог",
+                   command=self._clear_log).pack(side="right", padx=2)
+        ttk.Button(log_header, text="Удалить файл лога",
+                   command=self._delete_log_file).pack(side="right", padx=2)
         self.log_text = scrolledtext.ScrolledText(
             self.main_frame, height=8, width=80, state="disabled", wrap="word"
         )
@@ -586,6 +592,43 @@ class App(tk.Tk):
         self.log_text.see(tk.END)
         self.log_text.configure(state="disabled")
         logger.info(message)
+
+    def _clear_log(self):
+        """Очищает текст в окне лога."""
+        self.log_text.configure(state="normal")
+        self.log_text.delete("1.0", tk.END)
+        self.log_text.configure(state="disabled")
+
+    def _delete_log_file(self):
+        """Удаляет файл cleaner.log с диска."""
+        from core.utils import get_app_dir
+        log_path = get_app_dir() / 'cleaner.log'
+        if not log_path.exists():
+            messagebox.showinfo("Лог", "Файл лога не найден.")
+            return
+        if not messagebox.askyesno(
+            "Удалить лог",
+            f"Удалить файл лога?\n{log_path}"
+        ):
+            return
+        try:
+            # Закрываем файловые хэндлеры логгера перед удалением
+            for handler in logger.handlers[:]:
+                if isinstance(handler, logging.FileHandler):
+                    handler.close()
+                    logger.removeHandler(handler)
+            log_path.unlink()
+            self._clear_log()
+            # Пересоздаём логгер
+            fh = logging.FileHandler(str(log_path), encoding='utf-8')
+            fh.setLevel(logging.DEBUG)
+            fh.setFormatter(logging.Formatter(
+                '%(asctime)s [%(levelname)s] %(message)s', '%Y-%m-%d %H:%M:%S'
+            ))
+            logger.addHandler(fh)
+            self._log("Файл лога удалён и пересоздан.", "info")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось удалить лог:\n{e}")
 
     def _update_status(self):
         n = len(self.files)
