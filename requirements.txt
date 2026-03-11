@@ -2,4 +2,5 @@ python-docx==1.1.2
 PyMuPDF==1.24.14
 Pillow==11.0.0
 pytesseract==0.3.13
+openpyxl==3.1.5
 pyinstaller==6.11.1

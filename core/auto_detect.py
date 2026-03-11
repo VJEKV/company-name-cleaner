@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass, field
 
 from core.cities_db import RUSSIAN_CITIES, is_city, find_city, _normalize_yo, _CITIES_YO_MAP
+from core.patterns import _get_city_case_forms
 from core.whitelist import is_whitelisted_org, is_whitelisted_in_context
 
 
@@ -32,6 +33,7 @@ ENTITY_SNILS = "snils"
 ENTITY_PASSPORT = "passport"
 ENTITY_PHONE = "phone"
 ENTITY_EMAIL = "email"
+ENTITY_URL = "url"
 ENTITY_ADDRESS = "address"
 
 
@@ -426,6 +428,28 @@ RE_EMAIL_BARE = re.compile(
     r'\b([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,})\b'
 )
 
+# URL / интернет-адреса
+RE_URL = re.compile(
+    r'https?://[^\s<>\"\')\]},;]{3,}',
+    re.IGNORECASE,
+)
+RE_URL_WWW = re.compile(
+    r'(?<!\S)www\.[a-zA-Z0-9][-a-zA-Z0-9]*\.[a-zA-Z]{2,}(?:[/\w\-.~:/?#\[\]@!$&\'()*+,;=%]*)?',
+    re.IGNORECASE,
+)
+# Домены без протокола: example.ru, site.com (только в контексте "сайт", "адрес сайта" и т.п.)
+RE_URL_DOMAIN = re.compile(
+    r'(?:сайт|веб[-\s]?сайт|адрес\s+сайта|интернет[-\s]?(?:страниц|адрес|ресурс|портал))\w*\s*:?\s*'
+    r'([a-zA-Z0-9][-a-zA-Z0-9]*\.(?:ru|рф|com|org|net|su|info|biz|pro|me|io|рус)[^\s<>\"\')\]},;]*)',
+    re.IGNORECASE,
+)
+# Голые домены: example.ru, firm.com (без контекста — ловим популярные зоны)
+RE_DOMAIN_BARE = re.compile(
+    r'\b([a-zA-Z0-9][-a-zA-Z0-9]{1,61}\.(?:ru|рф|com|org|net|su|info|biz|pro|me|io|рус)'
+    r'(?:\.[a-zA-Z]{2,})?(?:/[^\s<>\"\')\]},;]*)?)\b',
+    re.IGNORECASE,
+)
+
 # Адрес — ловим максимально полно
 RE_ADDRESS = re.compile(
     r'(?:ул(?:ица)?[-.\s]+|пр(?:оспект)?[-.\s]+|пер(?:еулок)?[-.\s]+|'
@@ -474,9 +498,9 @@ RE_ADDRESS_LABEL = re.compile(
 # Почтовый индекс
 RE_INDEX = re.compile(r'(?<!\d)(\d{6})(?:,?\s+(?:г\.|город|Россия|РФ|обл\.|респ\.))', re.IGNORECASE)
 
-# Город с префиксом
+# Город с префиксом (ловит и склонённые формы: г.Буденновске, город Москвы)
 RE_CITY_PREFIX = re.compile(
-    r'(?:г\.\s*|город\s+|гор\.\s*)([А-ЯЁ][а-яё]+(?:[-\s][А-ЯЁа-яё]+)?)',
+    r'(?:г\.\s*|город[ае]?\s+|гор\.\s*)([А-ЯЁа-яё]{3,}(?:[-\s][А-ЯЁа-яё]+)?)',
     re.IGNORECASE,
 )
 
@@ -535,6 +559,8 @@ def _auto_replacement(entity_type: str, original: str) -> str:
         repl = "+7 (000) 000-00-00"
     elif entity_type == ENTITY_EMAIL:
         repl = "email@example.com"
+    elif entity_type == ENTITY_URL:
+        repl = "https://example.com"
     elif entity_type == ENTITY_ADDRESS:
         _addr_counter += 1
         repl = f"ул. Улица, д. {_addr_counter}"
@@ -565,6 +591,22 @@ def _is_likely_surname(word: str) -> bool:
     lower = word.lower()
 
     # Фильтр прилагательных/причастий — типичные окончания
+    # НО: -ский/-цкий могут быть фамилиями (Городецкий, Достоевский, Чайковский)
+    # Для -ский/-цкий: пропускаем как фамилии если слово ≤12 букв
+    # (прилагательные обычно длиннее: "Металлургический", "Строительный")
+    _SURNAME_SKY_ENDINGS = (
+        'ский', 'ская', 'ского', 'скому', 'ским', 'ском', 'ских',
+        'цкий', 'цкая', 'цкого', 'цкому', 'цким', 'цком', 'цких',
+    )
+    _is_sky_ending = False
+    for sky_end in _SURNAME_SKY_ENDINGS:
+        if lower.endswith(sky_end):
+            _is_sky_ending = True
+            break
+    # Если слово заканчивается на -ский/-цкий и короткое — считаем фамилией
+    if _is_sky_ending and len(lower) <= 12:
+        return True
+
     _ADJ_ENDINGS = (
         'ский', 'ская', 'ское', 'ского', 'ской', 'ским', 'ском', 'ских',
         'ские', 'скую',
@@ -793,15 +835,54 @@ def detect_organizations(text: str) -> list[DetectedEntity]:
     return entities
 
 
+def _find_city_by_form(word: str) -> str | None:
+    """Находит город по любой падежной форме (включая ё/е нормализацию)."""
+    # Прямое совпадение
+    canonical = find_city(word)
+    if canonical:
+        return canonical
+    # Проверяем: не является ли word падежной формой какого-то города
+    word_lower = _normalize_yo(word).lower()
+    for city in RUSSIAN_CITIES:
+        forms = _get_city_case_forms(city)
+        for form in forms:
+            if _normalize_yo(form).lower() == word_lower:
+                return city
+    return None
+
+
+# Кэш: словарь «склонённая_форма_lower» → «каноническое_имя_города»
+_CITY_FORMS_CACHE: dict[str, str] = {}
+
+
+def _build_city_forms_cache():
+    """Строит кэш всех падежных форм всех городов (с ё/е нормализацией)."""
+    if _CITY_FORMS_CACHE:
+        return
+    for city in RUSSIAN_CITIES:
+        forms = _get_city_case_forms(city)
+        for form in forms:
+            key = _normalize_yo(form).lower()
+            # Не перезаписываем — приоритет именительному падежу
+            if key not in _CITY_FORMS_CACHE:
+                _CITY_FORMS_CACHE[key] = city
+
+
 def detect_cities(text: str) -> list[DetectedEntity]:
-    """Обнаруживает названия городов из справочника (нечувствительно к ё/е)."""
+    """Обнаруживает названия городов из справочника (нечувствительно к ё/е),
+    включая склонённые формы (Москве, Буденновске, Саратова и т.д.)."""
+    _build_city_forms_cache()
     entities = []
 
-    # г. Москва, город Москва
+    # г. Москва, город Москвы, г.Буденновске — с префиксом
     for m in RE_CITY_PREFIX.finditer(text):
         city_name = m.group(1).strip()
         full = m.group(0)
+        # Ищем и по именительному, и по склонённой форме
         canonical = find_city(city_name)
+        if not canonical:
+            key = _normalize_yo(city_name).lower()
+            canonical = _CITY_FORMS_CACHE.get(key)
         if canonical:
             entities.append(DetectedEntity(
                 start=m.start(), end=m.end(), text=full,
@@ -810,43 +891,49 @@ def detect_cities(text: str) -> list[DetectedEntity]:
                 confidence=0.95,
             ))
 
-    # Города без префикса — только в контексте адреса/реквизитов
-    # Ищем и с ё, и с е
-    checked_cities = set()
+    # Города без префикса — ищем все падежные формы, но только в адресном контексте
+    checked_forms = set()
     for city in RUSSIAN_CITIES:
-        variants = {city}
-        # Добавляем вариант с е вместо ё
-        city_no_yo = _normalize_yo(city)
-        if city_no_yo != city:
-            variants.add(city_no_yo)
-        for variant in variants:
-            if variant in checked_cities:
-                continue
-            checked_cities.add(variant)
-            for m in re.finditer(r'\b' + re.escape(variant) + r'\b', text):
-                ctx_start = max(0, m.start() - 30)
-                ctx_end = min(len(text), m.end() + 30)
-                context = text[ctx_start:ctx_end].lower()
+        forms = _get_city_case_forms(city)
+        for form in forms:
+            # Добавляем вариант с е вместо ё
+            variants = {form}
+            form_no_yo = _normalize_yo(form)
+            if form_no_yo != form:
+                variants.add(form_no_yo)
+            for variant in variants:
+                if variant.lower() in checked_forms:
+                    continue
+                checked_forms.add(variant.lower())
+                if len(variant) < 3:
+                    continue
+                for m in re.finditer(r'\b' + re.escape(variant) + r'\b', text, re.IGNORECASE):
+                    ctx_start = max(0, m.start() - 30)
+                    ctx_end = min(len(text), m.end() + 30)
+                    context = text[ctx_start:ctx_end].lower()
 
-                in_address_ctx = any(marker in context for marker in (
-                    'адрес', 'ул.', 'ул ', 'улица', 'пр.', 'проспект',
-                    'пер.', 'переулок', 'обл.', 'область', 'край',
-                    'респ', 'район', 'индекс', ',', 'г.', 'город',
-                ))
+                    in_address_ctx = any(marker in context for marker in (
+                        'адрес', 'ул.', 'ул ', 'улица', 'пр.', 'проспект',
+                        'пер.', 'переулок', 'обл.', 'область', 'край',
+                        'респ', 'район', 'индекс', ',', 'г.', 'город',
+                    ))
 
-                if in_address_ctx:
-                    already = False
-                    for e in entities:
-                        if m.start() >= e.start and m.end() <= e.end:
-                            already = True
-                            break
-                    if not already:
-                        entities.append(DetectedEntity(
-                            start=m.start(), end=m.end(), text=variant,
-                            entity_type=ENTITY_CITY,
-                            replacement=_auto_replacement(ENTITY_CITY, city),
-                            confidence=0.8,
-                        ))
+                    if in_address_ctx:
+                        already = False
+                        for e in entities:
+                            if m.start() >= e.start and m.end() <= e.end:
+                                already = True
+                                break
+                            if m.start() < e.end and m.end() > e.start:
+                                already = True
+                                break
+                        if not already:
+                            entities.append(DetectedEntity(
+                                start=m.start(), end=m.end(), text=m.group(0),
+                                entity_type=ENTITY_CITY,
+                                replacement=_auto_replacement(ENTITY_CITY, city),
+                                confidence=0.8,
+                            ))
 
     return entities
 
@@ -928,7 +1015,7 @@ def detect_personal_ids(text: str) -> list[DetectedEntity]:
 
 
 def detect_contacts(text: str) -> list[DetectedEntity]:
-    """Обнаруживает телефоны и email."""
+    """Обнаруживает телефоны, email и интернет-адреса (URL)."""
     entities = []
 
     for pattern in (RE_PHONE, RE_PHONE_BARE, RE_PHONE_8, RE_PHONE_LOCAL, RE_PHONE_LOCAL_BARE):
@@ -947,6 +1034,49 @@ def detect_contacts(text: str) -> list[DetectedEntity]:
                 entity_type=ENTITY_EMAIL,
                 replacement=_auto_replacement(ENTITY_EMAIL, email),
             ))
+
+    # URL / интернет-адреса
+    for pattern in (RE_URL, RE_URL_WWW):
+        for m in pattern.finditer(text):
+            url = m.group(0).rstrip('.,;:!?)»')
+            entities.append(DetectedEntity(
+                start=m.start(), end=m.start() + len(url), text=url,
+                entity_type=ENTITY_URL,
+                replacement=_auto_replacement(ENTITY_URL, url),
+                confidence=0.95,
+            ))
+
+    # Домены в контексте "сайт: ..."
+    for m in RE_URL_DOMAIN.finditer(text):
+        domain = m.group(1).rstrip('.,;:!?)»')
+        entities.append(DetectedEntity(
+            start=m.start(1), end=m.start(1) + len(domain), text=domain,
+            entity_type=ENTITY_URL,
+            replacement=_auto_replacement(ENTITY_URL, domain),
+            confidence=0.9,
+        ))
+
+    # Голые домены (example.ru, firm.com)
+    found_ranges = {(e.start, e.end) for e in entities}
+    for m in RE_DOMAIN_BARE.finditer(text):
+        domain = m.group(1).rstrip('.,;:!?)»')
+        # Пропускаем если уже покрыто email или другим URL
+        overlaps = False
+        for (s, e) in found_ranges:
+            if m.start(1) < e and (m.start(1) + len(domain)) > s:
+                overlaps = True
+                break
+        if overlaps:
+            continue
+        # Пропускаем example.com и подобные заглушки
+        if domain.lower().startswith('example.'):
+            continue
+        entities.append(DetectedEntity(
+            start=m.start(1), end=m.start(1) + len(domain), text=domain,
+            entity_type=ENTITY_URL,
+            replacement=_auto_replacement(ENTITY_URL, domain),
+            confidence=0.8,
+        ))
 
     return entities
 
@@ -1063,6 +1193,8 @@ def auto_detect_in_file(filepath: str) -> dict:
         return _detect_in_docx(filepath)
     elif ext == '.pdf':
         return _detect_in_pdf(filepath)
+    elif ext in ('.xlsx', '.xls'):
+        return _detect_in_xlsx(filepath)
     else:
         return {
             "filepath": filepath,
@@ -1213,6 +1345,57 @@ def _detect_in_pdf(filepath: str) -> dict:
     }
 
 
+def _detect_in_xlsx(filepath: str) -> dict:
+    """Автодетекция в Excel-файле (.xlsx/.xls)."""
+    try:
+        from core.xlsx_cleaner import extract_text_xlsx, is_openpyxl_available
+    except ImportError:
+        return {
+            "filepath": filepath,
+            "entities": [],
+            "pages": {},
+            "text": "",
+            "by_type": {},
+            "error": "Модуль xlsx_cleaner недоступен",
+        }
+
+    if not is_openpyxl_available():
+        return {
+            "filepath": filepath,
+            "entities": [],
+            "pages": {},
+            "text": "",
+            "by_type": {},
+            "error": "openpyxl не установлен. Установите: pip install openpyxl",
+        }
+
+    full_text = extract_text_xlsx(filepath)
+    if not full_text:
+        return {
+            "filepath": filepath,
+            "entities": [],
+            "pages": {},
+            "text": "",
+            "by_type": {},
+            "error": None,
+        }
+
+    entities = auto_detect_all(full_text)
+
+    by_type = {}
+    for e in entities:
+        by_type.setdefault(e.entity_type, []).append(e)
+
+    return {
+        "filepath": filepath,
+        "entities": entities,
+        "pages": {1: full_text},
+        "text": full_text,
+        "by_type": by_type,
+        "error": None,
+    }
+
+
 def _deduplicate(entities: list[DetectedEntity]) -> list[DetectedEntity]:
     """Убирает пересекающиеся сущности, приоритет более длинным."""
     if not entities:
@@ -1246,6 +1429,7 @@ ENTITY_TYPE_NAMES = {
     ENTITY_PASSPORT: "Паспортные данные",
     ENTITY_PHONE: "Телефоны",
     ENTITY_EMAIL: "Email",
+    ENTITY_URL: "Интернет-адреса",
     ENTITY_ADDRESS: "Адреса",
 }
 

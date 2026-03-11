@@ -28,6 +28,12 @@ from core.pdf_cleaner import (
     clean_pdf_stamp_mode,
     preview_pdf,
 )
+from core.xlsx_cleaner import (
+    clean_xlsx,
+    preview_xlsx,
+    extract_text_xlsx,
+    is_openpyxl_available,
+)
 from core.utils import (
     setup_logging,
     load_config,
@@ -525,9 +531,10 @@ class App(tk.Tk):
         paths = filedialog.askopenfilenames(
             title="Выберите файлы",
             filetypes=[
-                ("Документы", "*.docx *.pdf"),
+                ("Документы", "*.docx *.pdf *.xlsx *.xls"),
                 ("Word", "*.docx"),
                 ("PDF", "*.pdf"),
+                ("Excel", "*.xlsx *.xls"),
                 ("Все файлы", "*.*"),
             ],
         )
@@ -584,9 +591,12 @@ class App(tk.Tk):
         n = len(self.files)
         docx_count = sum(1 for f in self.files if f.lower().endswith('.docx'))
         pdf_count = sum(1 for f in self.files if f.lower().endswith('.pdf'))
-        self.status_var.set(
-            f"Файлов: {n} (DOCX: {docx_count}, PDF: {pdf_count})"
-        )
+        xlsx_count = sum(1 for f in self.files if f.lower().endswith(('.xlsx', '.xls')))
+        parts = [f"Файлов: {n} (DOCX: {docx_count}, PDF: {pdf_count}"]
+        if xlsx_count:
+            parts[0] += f", Excel: {xlsx_count}"
+        parts[0] += ")"
+        self.status_var.set(parts[0])
 
     # ── Build replacement rules ─────────────────────────────
 
@@ -790,6 +800,10 @@ class App(tk.Tk):
                             stamp_type=self.stamp_var.get(),
                             ocr_enabled=ocr_on,
                         )
+                elif ext in ('.xlsx', '.xls'):
+                    result = clean_xlsx(
+                        filepath, output_path, replacement_rules
+                    )
                 else:
                     continue
 
@@ -881,6 +895,8 @@ class App(tk.Tk):
                         filepath, replacement_rules,
                         ocr_enabled=self.ocr_enabled.get(),
                     )
+                elif ext in ('.xlsx', '.xls'):
+                    result = preview_xlsx(filepath, replacement_rules)
                 else:
                     continue
 
@@ -1065,6 +1081,7 @@ class App(tk.Tk):
             "passport": "marker_passport",
             "phone": "marker_contact",
             "email": "marker_contact",
+            "url": "marker_contact",
             "address": "marker_address",
         }
 
@@ -1164,7 +1181,7 @@ class App(tk.Tk):
         legends = [
             ("ФИО", "#FFFF00"), ("Организации", "#FFD700"),
             ("Города", "#98FB98"), ("Реквизиты", "#87CEEB"),
-            ("Контакты", "#DDA0DD"), ("Адреса", "#F0E68C"),
+            ("Контакты/URL", "#DDA0DD"), ("Адреса", "#F0E68C"),
             ("Паспорт/СНИЛС", "#FFA07A"),
         ]
         for name, color in legends:
@@ -1279,6 +1296,9 @@ class App(tk.Tk):
                 elif ext == '.pdf':
                     from core.pdf_cleaner import clean_pdf_text_mode
                     res = clean_pdf_text_mode(filepath, output_path, replacement_rules)
+                elif ext in ('.xlsx', '.xls'):
+                    from core.xlsx_cleaner import clean_xlsx
+                    res = clean_xlsx(filepath, output_path, replacement_rules)
                 else:
                     continue
 

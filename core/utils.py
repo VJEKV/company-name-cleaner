@@ -73,9 +73,9 @@ def format_file_size(size_bytes: int) -> str:
 
 
 def is_valid_file(filepath: str) -> bool:
-    """Проверяет, что файл — .docx или .pdf."""
+    """Проверяет, что файл — .docx, .pdf или .xlsx."""
     ext = Path(filepath).suffix.lower()
-    return ext in ('.docx', '.pdf')
+    return ext in ('.docx', '.pdf', '.xlsx', '.xls')
 
 
 def ensure_output_dir(output_dir: str) -> Path:
