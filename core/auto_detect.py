@@ -362,11 +362,17 @@ RE_IP = re.compile(
     rf'ИП\s+([А-ЯЁ][а-яё]{{2,}}(?:\s+{_INIT}|\s+[А-ЯЁ][а-яё]+\s+{_PATRONYMIC})?)'
 )
 
-# Реквизиты
+# Реквизиты (с меткой)
 RE_INN = re.compile(r'ИНН\s*:?\s*(\d{10}(?:\d{2})?)\b')
 RE_OGRN = re.compile(r'ОГРН(?:ИП)?\s*:?\s*(\d{13,15})\b')
 RE_KPP = re.compile(r'КПП\s*:?\s*(\d{9})\b')
 RE_BIK = re.compile(r'БИК\s*:?\s*(\d{9})\b')
+
+# Голые реквизиты без метки (для таблиц реквизитов ДС)
+# ИНН: 10 цифр (юрлицо) или 12 цифр (физлицо/ИП), не часть более длинного числа
+RE_INN_BARE = re.compile(r'(?<!\d)(\d{10}|\d{12})(?!\d)')
+# КПП: ровно 9 цифр, первые 2 — код региона (01-99), 5-6 позиции — причина (01-99 или AZ)
+RE_KPP_BARE = re.compile(r'(?<!\d)(\d{9})(?!\d)')
 RE_ACCOUNT = re.compile(
     r'(?:р/с|р\.с\.|расч[её]тный\s+сч[её]т|к/с|к\.с\.|корр[.]?\s*сч[её]т|'
     r'лицевой\s+сч[её]т|л/с)\s*:?\s*(\d{20})\b',
@@ -442,8 +448,10 @@ RE_EMAIL = re.compile(
     r'([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)',
     re.IGNORECASE,
 )
+# Email без метки: ослабленные границы для склеенных строк в PDF/DOCX
 RE_EMAIL_BARE = re.compile(
-    r'\b([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,})\b'
+    r'(?:^|[^a-zA-Z0-9_.+-])([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z]{2,})',
+    re.MULTILINE,
 )
 
 # URL / интернет-адреса
@@ -1031,6 +1039,49 @@ def detect_requisites(text: str) -> list[DetectedEntity]:
             replacement=_auto_replacement(ENTITY_BIK, m.group(1)),
         ))
 
+    # Голые ИНН (10/12 цифр без метки) — ловим в контексте таблиц реквизитов
+    labeled_ranges = {(e.start, e.end) for e in entities}
+    for m in RE_INN_BARE.finditer(text):
+        digits = m.group(1)
+        # Пропускаем если уже поймали с меткой
+        if any(m.start() >= s and m.end() <= e for s, e in labeled_ranges):
+            continue
+        # Пропускаем тривиальные числа (все нули, все одинаковые)
+        if len(set(digits)) <= 1:
+            continue
+        # Валидация ИНН: первые 2 цифры — код региона (01-99)
+        region = int(digits[:2])
+        if region < 1 or region > 99:
+            continue
+        entities.append(DetectedEntity(
+            start=m.start(), end=m.end(), text=digits,
+            entity_type=ENTITY_INN,
+            replacement=_auto_replacement(ENTITY_INN, digits),
+            confidence=0.75,
+        ))
+
+    # Голые КПП (9 цифр без метки)
+    labeled_ranges = {(e.start, e.end) for e in entities}
+    for m in RE_KPP_BARE.finditer(text):
+        digits = m.group(1)
+        if any(m.start() >= s and m.end() <= e for s, e in labeled_ranges):
+            continue
+        if len(set(digits)) <= 1:
+            continue
+        # КПП: первые 2 цифры — код региона (01-99), 5-6 — причина постановки (01-99)
+        region = int(digits[:2])
+        reason = int(digits[4:6])
+        if region < 1 or region > 99:
+            continue
+        if reason < 1 or reason > 99:
+            continue
+        entities.append(DetectedEntity(
+            start=m.start(), end=m.end(), text=digits,
+            entity_type=ENTITY_KPP,
+            replacement=_auto_replacement(ENTITY_KPP, digits),
+            confidence=0.7,
+        ))
+
     # Счета с ключевыми словами (высокий приоритет)
     account_ranges: set[tuple[int, int]] = set()
     for pattern in (RE_ACCOUNT, RE_ACCOUNT_SPACED, RE_ACCOUNT_BARE):
@@ -1107,11 +1158,33 @@ def detect_contacts(text: str) -> list[DetectedEntity]:
                 replacement=_auto_replacement(ENTITY_PHONE, m.group(0)),
             ))
 
+    email_ranges: set[tuple[int, int]] = set()
     for pattern in (RE_EMAIL, RE_EMAIL_BARE):
         for m in pattern.finditer(text):
-            email = m.group(0) if pattern == RE_EMAIL_BARE else m.group(0)
+            if pattern is RE_EMAIL_BARE:
+                email = m.group(1)
+                email_start = m.start(1)
+                email_end = m.start(1) + len(email)
+            else:
+                email = m.group(0)
+                email_start = m.start()
+                email_end = m.end()
+            # Пропускаем заглушки
+            if '@example.' in email.lower() or email.lower() in (
+                'test@test.com', 'example@example.com',
+            ):
+                continue
+            # Дедупликация: пропускаем если email уже покрыт
+            overlap = False
+            for (s, e) in email_ranges:
+                if email_start < e and email_end > s:
+                    overlap = True
+                    break
+            if overlap:
+                continue
+            email_ranges.add((email_start, email_end))
             entities.append(DetectedEntity(
-                start=m.start(), end=m.end(), text=email,
+                start=email_start, end=email_end, text=email,
                 entity_type=ENTITY_EMAIL,
                 replacement=_auto_replacement(ENTITY_EMAIL, email),
             ))
