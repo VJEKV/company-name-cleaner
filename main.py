@@ -880,7 +880,7 @@ class App(ctk.CTk):
             self._pending_selection = None
 
     def _add_selected_text(self):
-        """Добавляет выделенный текст как правило замены."""
+        """Добавляет выделенный текст как правило замены и подсвечивает в превью."""
         sel = getattr(self, '_pending_selection', None)
         if not sel:
             messagebox.showinfo("Выделение", "Выделите текст в предпросмотре мышкой.")
@@ -890,6 +890,47 @@ class App(ctk.CTk):
         row.set_search(sel)
         self.sel_text_label.configure(text=f"Добавлено: «{sel[:40]}»", text_color=C["green"])
         self._pending_selection = None
+
+        # Определяем entity_type для маркера
+        type_map = {
+            "Организация": "organization",
+            "Город": "city",
+            "ФИО подписант": "surname",
+            "ФИО участники": "surname",
+            "Своё поле": "address",
+        }
+        etype = type_map.get(ft, "organization")
+
+        # Добавляем как entity в авто-результаты текущего файла и подсвечиваем
+        fname = self.preview_file_var.get()
+        for r in self._last_detect_results:
+            if Path(r["filepath"]).name == fname:
+                full_text = r.get("text", "")
+                # Находим все вхождения в тексте
+                import re as _re
+                for m in _re.finditer(_re.escape(sel), full_text, _re.IGNORECASE):
+                    # Проверяем нет ли уже такой entity
+                    already = any(
+                        e.start == m.start() and e.end == m.end()
+                        for e in r.get("entities", [])
+                    )
+                    if not already:
+                        from core.auto_detect import DetectedEntity, _auto_replacement
+                        new_e = DetectedEntity(
+                            start=m.start(), end=m.end(),
+                            text=m.group(), entity_type=etype,
+                            replacement=_auto_replacement(etype, m.group()),
+                            confidence=1.0,
+                        )
+                        r.setdefault("entities", []).append(new_e)
+
+                # Перерисовываем превью с новыми маркерами
+                self._render_file_preview(r)
+
+                # Обновляем сводку
+                total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
+                self.found_label.configure(text=f"Найдено: {total}")
+                break
 
     # ── Auto-detect ──
 
