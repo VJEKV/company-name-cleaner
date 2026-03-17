@@ -1,15 +1,15 @@
 """
 Titan Cleaner v4.0 — портативное GUI-приложение.
 Анонимизация и деанонимизация документов (.docx, .pdf, .xlsx).
-Замена названия компании, фамилий, городов и произвольных полей
-на английские псевдонимы с возможностью обратной замены.
-UI на CustomTkinter (тёмная тема).
+Двухпанельный интерфейс: управление слева, предпросмотр текста справа.
+Маппинг хранится в SQLite базе.
 """
 
 import csv
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import traceback
@@ -17,9 +17,8 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-# Логирование ошибок запуска в файл (для --windowed .exe)
+# Логирование ошибок запуска
 def _log_startup_error(msg):
-    """Записывает ошибку запуска в файл рядом с .exe."""
     try:
         if getattr(sys, 'frozen', False):
             log_path = Path(sys.executable).parent / 'titan_error.log'
@@ -34,15 +33,10 @@ try:
     import customtkinter as ctk
 except ImportError as e:
     _log_startup_error(f"CustomTkinter import error: {e}\n{traceback.format_exc()}")
-    # Показываем ошибку через базовый tkinter
     try:
         root = tk.Tk()
         root.withdraw()
-        messagebox.showerror(
-            "Ошибка запуска",
-            f"Не удалось загрузить CustomTkinter:\n{e}\n\n"
-            "Проверьте файл titan_error.log"
-        )
+        messagebox.showerror("Ошибка", f"Не удалось загрузить CustomTkinter:\n{e}")
     except Exception:
         pass
     sys.exit(1)
@@ -58,81 +52,88 @@ from core.replacements import (
     ReplacementMapper,
 )
 from core.english_pseudonyms import EnglishPseudonymGenerator
-from core.deanonymizer import AnonymizationMap, deanonymize_file
+from core.database import SessionDB
 from core.docx_cleaner import clean_docx, preview_docx
-from core.pdf_cleaner import (
-    clean_pdf_text_mode,
-    clean_pdf_stamp_mode,
-    preview_pdf,
-)
-from core.xlsx_cleaner import (
-    clean_xlsx,
-    preview_xlsx,
-    extract_text_xlsx,
-    is_openpyxl_available,
-)
+from core.pdf_cleaner import clean_pdf_text_mode, clean_pdf_stamp_mode, preview_pdf
+from core.xlsx_cleaner import clean_xlsx, preview_xlsx, extract_text_xlsx, is_openpyxl_available
 from core.utils import (
-    setup_logging,
-    load_config,
-    save_config,
-    get_assets_dir,
-    is_valid_file,
-    ensure_output_dir,
-    format_file_size,
+    setup_logging, load_config, save_config, get_assets_dir,
+    is_valid_file, ensure_output_dir, format_file_size,
 )
 from core.auto_detect import (
-    auto_detect_all,
-    auto_detect_in_file,
-    DetectedEntity,
-    ENTITY_TYPE_NAMES,
-    get_type_name,
-    _reset_counters,
-    _replacement_cache,
+    auto_detect_in_file, DetectedEntity, ENTITY_TYPE_NAMES,
+    get_type_name, _reset_counters, _replacement_cache,
 )
 
 APP_TITLE = "Titan Cleaner v4.0"
-WINDOW_WIDTH = 1000
-WINDOW_HEIGHT = 900
+WINDOW_WIDTH = 1280
+WINDOW_HEIGHT = 820
 
-# Цветовая палитра
-COLORS = {
-    "bg": "#1a1a2e",
-    "surface": "#16213e",
-    "card": "#0f3460",
-    "accent": "#e94560",
-    "accent_hover": "#c73852",
-    "success": "#00b894",
-    "warning": "#fdcb6e",
-    "error": "#d63031",
-    "info": "#74b9ff",
-    "text": "#eaf0f6",
-    "text_secondary": "#a4b0be",
-    "border": "#2d3748",
-    "input_bg": "#1e2d45",
-    "button_primary": "#e94560",
-    "button_secondary": "#0f3460",
-    "button_success": "#00b894",
-    "button_danger": "#d63031",
+# Цвета
+C = {
+    "bg":         "#111827",
+    "surface":    "#1f2937",
+    "card":       "#374151",
+    "input":      "#1e293b",
+    "border":     "#4b5563",
+    "accent":     "#ef4444",   # красный — основное действие
+    "accent_h":   "#dc2626",
+    "blue":       "#3b82f6",   # синий — поиск/инфо
+    "blue_h":     "#2563eb",
+    "green":      "#10b981",   # зелёный — деанонимизация
+    "green_h":    "#059669",
+    "gray":       "#6b7280",   # серый — второстепенное
+    "gray_h":     "#4b5563",
+    "text":       "#f3f4f6",
+    "text2":      "#9ca3af",
+    "text3":      "#6b7280",
+    # Маркеры по типам
+    "m_surname":  "#fbbf24",   # жёлтый
+    "m_org":      "#f97316",   # оранжевый
+    "m_city":     "#34d399",   # зелёный
+    "m_req":      "#60a5fa",   # голубой
+    "m_contact":  "#c084fc",   # сиреневый
+    "m_address":  "#fb923c",   # оранж-светлый
+    "m_doc":      "#f87171",   # красноватый
 }
 
-logger = setup_logging()
+MARKER_COLORS = {
+    "surname":      C["m_surname"],
+    "organization": C["m_org"],
+    "city":         C["m_city"],
+    "inn":          C["m_req"],
+    "ogrn":         C["m_req"],
+    "kpp":          C["m_req"],
+    "bik":          C["m_req"],
+    "account":      C["m_req"],
+    "snils":        C["m_doc"],
+    "passport":     C["m_doc"],
+    "phone":        C["m_contact"],
+    "email":        C["m_contact"],
+    "url":          C["m_contact"],
+    "address":      C["m_address"],
+}
 
-# Настройка CustomTkinter
-ctk.set_appearance_mode("dark")
-ctk.set_default_color_theme("blue")
+LEGEND = [
+    ("ФИО", C["m_surname"]),
+    ("Орг", C["m_org"]),
+    ("Город", C["m_city"]),
+    ("Рекв", C["m_req"]),
+    ("Конт", C["m_contact"]),
+    ("Док", C["m_doc"]),
+]
 
-# Типы полей для замены
 FIELD_TYPES = {
-    "Город": {
-        "hint_search": "Москва",
-        "hint_replace": "London",
-        "options_func": get_city_replacement_options,
-        "multiline": False,
-    },
     "Организация": {
         "hint_search": "ЛУКОЙЛ",
         "hint_replace": "Northgate Industries Ltd",
         "options_func": get_company_replacement_options,
+        "multiline": False,
+    },
+    "Город": {
+        "hint_search": "Москва",
+        "hint_replace": "London",
+        "options_func": get_city_replacement_options,
         "multiline": False,
     },
     "ФИО подписант": {
@@ -142,7 +143,7 @@ FIELD_TYPES = {
         "multiline": False,
     },
     "ФИО участники": {
-        "hint_search": "Сидоров\nКозлова\nМорозов",
+        "hint_search": "Сидоров\nКозлова",
         "hint_replace": "Employee #{n}",
         "options_func": get_surname_replacement_options,
         "multiline": True,
@@ -155,849 +156,753 @@ FIELD_TYPES = {
     },
 }
 
-# Английские опции замены (добавляются к русским)
-ENGLISH_REPLACEMENT_OPTIONS = {
-    "Город": {
-        "English cities": [
-            "London", "Manchester", "Bristol", "Cambridge", "Oxford",
-            "Liverpool", "Birmingham", "Edinburgh", "Glasgow", "Leeds",
-        ],
-    },
-    "Организация": {
-        "English companies": [
-            "Northgate Industries Ltd",
-            "Meridian Solutions Corp",
-            "Ashford & Partners Inc",
-            "Sterling Dynamics Ltd",
-            "Blackwood Engineering Co",
-        ],
-    },
-    "ФИО подписант": {
-        "English names": [
-            "J.A. Smith", "R.M. Johnson", "D.K. Williams",
-            "M.T. Brown", "S.L. Davis",
-        ],
-    },
-    "ФИО участники": {
-        "English sequential": [
-            "Employee #{n}",
-            "Staff Member #{n}",
-            "Specialist #{n}",
-        ],
-    },
+ENGLISH_OPTIONS = {
+    "Организация": ["Northgate Industries Ltd", "Meridian Solutions Corp",
+                     "Ashford & Partners Inc", "Sterling Dynamics Ltd"],
+    "Город": ["London", "Manchester", "Bristol", "Cambridge", "Oxford"],
+    "ФИО подписант": ["J.A. Smith", "R.M. Johnson", "D.K. Williams"],
+    "ФИО участники": ["Employee #{n}", "Staff Member #{n}"],
 }
 
+logger = setup_logging()
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+
+# ══════════════════════════════════════════════════════════════
+#  FieldRow — один ряд замены
+# ══════════════════════════════════════════════════════════════
 
 class FieldRow:
-    """Один ряд параметров замены в GUI (CustomTkinter)."""
-
-    def __init__(self, parent_frame, field_type: str, on_delete=None, idx: int = 0):
+    def __init__(self, parent, field_type, on_delete=None):
         self.field_type = field_type
         self.on_delete = on_delete
-        self.idx = idx
-        config = FIELD_TYPES.get(field_type, FIELD_TYPES["Своё поле"])
+        cfg = FIELD_TYPES.get(field_type, FIELD_TYPES["Своё поле"])
 
-        self.frame = ctk.CTkFrame(parent_frame, corner_radius=8)
-        self.frame.pack(fill="x", padx=5, pady=4)
+        self.frame = ctk.CTkFrame(parent, corner_radius=6, fg_color=C["card"])
+        self.frame.pack(fill="x", padx=4, pady=2)
 
-        # Заголовок типа поля
-        header = ctk.CTkFrame(self.frame, fg_color="transparent")
-        header.pack(fill="x", padx=8, pady=(6, 2))
+        row = ctk.CTkFrame(self.frame, fg_color="transparent")
+        row.pack(fill="x", padx=6, pady=4)
 
-        ctk.CTkLabel(
-            header, text=field_type,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=COLORS["accent"],
-        ).pack(side="left")
+        ctk.CTkLabel(row, text=field_type, width=100, anchor="w",
+                     font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=MARKER_COLORS.get(
+                         {"Организация": "organization", "Город": "city",
+                          "ФИО подписант": "surname", "ФИО участники": "surname",
+                          "Своё поле": "address"}.get(field_type, "surname"),
+                         C["text"])).pack(side="left")
 
-        if on_delete:
-            ctk.CTkButton(
-                header, text="✕", width=30, height=26,
-                fg_color=COLORS["button_danger"],
-                hover_color="#b02727",
-                font=ctk.CTkFont(size=12),
-                command=self._delete,
-            ).pack(side="right")
-
-        # Строка: Искать
-        search_row = ctk.CTkFrame(self.frame, fg_color="transparent")
-        search_row.pack(fill="x", padx=8, pady=2)
-
-        ctk.CTkLabel(search_row, text="Искать:", width=70, anchor="w").pack(side="left")
-
-        if config["multiline"]:
+        if cfg["multiline"]:
             self.search_widget = ctk.CTkTextbox(
-                self.frame, height=65, corner_radius=6,
-                fg_color=COLORS["input_bg"],
-                text_color=COLORS["text"],
-            )
-            self.search_widget.pack(fill="x", padx=8, pady=(0, 2))
+                self.frame, height=45, corner_radius=4,
+                fg_color=C["input"], text_color=C["text"],
+                font=ctk.CTkFont(size=11))
+            self.search_widget.pack(fill="x", padx=6, pady=(0, 2))
         else:
             self.search_var = ctk.StringVar()
             self.search_widget = ctk.CTkEntry(
-                search_row, textvariable=self.search_var,
-                placeholder_text=config["hint_search"],
-                fg_color=COLORS["input_bg"],
-                border_color=COLORS["border"],
-                text_color=COLORS["text"],
-            )
-            self.search_widget.pack(side="left", padx=(5, 0), fill="x", expand=True)
+                row, textvariable=self.search_var, width=160,
+                placeholder_text=cfg["hint_search"],
+                fg_color=C["input"], border_color=C["border"],
+                text_color=C["text"], font=ctk.CTkFont(size=11))
+            self.search_widget.pack(side="left", padx=4, fill="x", expand=True)
 
-        # Строка: Замена
-        replace_row = ctk.CTkFrame(self.frame, fg_color="transparent")
-        replace_row.pack(fill="x", padx=8, pady=(2, 6))
+        if on_delete:
+            ctk.CTkButton(row, text="✕", width=24, height=24,
+                          fg_color=C["gray"], hover_color=C["accent"],
+                          font=ctk.CTkFont(size=10),
+                          command=self._delete).pack(side="right")
 
-        ctk.CTkLabel(replace_row, text="Замена:", width=70, anchor="w").pack(side="left")
+        row2 = ctk.CTkFrame(self.frame, fg_color="transparent")
+        row2.pack(fill="x", padx=6, pady=(0, 4))
 
-        self.replace_var = ctk.StringVar(value=config["hint_replace"])
+        ctk.CTkLabel(row2, text="→", width=20).pack(side="left")
 
-        # Собираем все опции (русские + английские)
-        options = []
-        for cat, opts in config["options_func"]().items():
-            options.extend(opts)
-        eng_opts = ENGLISH_REPLACEMENT_OPTIONS.get(field_type, {})
-        for cat, opts in eng_opts.items():
-            options.extend(opts)
+        self.replace_var = ctk.StringVar(value=cfg["hint_replace"])
+        opts = []
+        for cat, items in cfg["options_func"]().items():
+            opts.extend(items)
+        for item in ENGLISH_OPTIONS.get(field_type, []):
+            if item not in opts:
+                opts.append(item)
 
         self.replace_combo = ctk.CTkComboBox(
-            replace_row, variable=self.replace_var,
-            values=list(dict.fromkeys(options)),
-            fg_color=COLORS["input_bg"],
-            border_color=COLORS["border"],
-            button_color=COLORS["accent"],
-            button_hover_color=COLORS["accent_hover"],
-            dropdown_fg_color=COLORS["surface"],
-            dropdown_hover_color=COLORS["card"],
-            text_color=COLORS["text"],
-            width=300,
-        )
-        self.replace_combo.pack(side="left", padx=(5, 0), fill="x", expand=True)
-
-        # Кнопка загрузки для multiline
-        if config["multiline"]:
-            btn_row = ctk.CTkFrame(self.frame, fg_color="transparent")
-            btn_row.pack(fill="x", padx=8, pady=(0, 4))
-            ctk.CTkButton(
-                btn_row, text="Из файла .txt", width=120,
-                height=28, font=ctk.CTkFont(size=11),
-                fg_color=COLORS["button_secondary"],
-                hover_color=COLORS["card"],
-                command=self._load_from_file,
-            ).pack(side="left")
+            row2, variable=self.replace_var, values=list(dict.fromkeys(opts)),
+            width=200, fg_color=C["input"], border_color=C["border"],
+            button_color=C["blue"], button_hover_color=C["blue_h"],
+            dropdown_fg_color=C["surface"], dropdown_hover_color=C["card"],
+            text_color=C["text"], font=ctk.CTkFont(size=11))
+        self.replace_combo.pack(side="left", padx=4, fill="x", expand=True)
 
     def _delete(self):
         self.frame.destroy()
         if self.on_delete:
             self.on_delete(self)
 
-    def _load_from_file(self):
-        path = filedialog.askopenfilename(
-            title="Файл со списком",
-            filetypes=[("Текстовые файлы", "*.txt"), ("Все файлы", "*.*")],
-        )
-        if path:
-            try:
-                with open(path, 'r', encoding='utf-8') as f:
-                    content = f.read()
-                self.search_widget.delete("1.0", "end")
-                self.search_widget.insert("1.0", content)
-            except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось прочитать файл:\n{e}")
-
-    def get_search_text(self) -> str:
-        config = FIELD_TYPES.get(self.field_type, FIELD_TYPES["Своё поле"])
-        if config["multiline"]:
+    def get_search(self):
+        cfg = FIELD_TYPES.get(self.field_type, FIELD_TYPES["Своё поле"])
+        if cfg["multiline"]:
             return self.search_widget.get("1.0", "end").strip()
         return self.search_var.get().strip()
 
-    def get_replace_text(self) -> str:
+    def get_replace(self):
         return self.replace_var.get().strip()
 
-    def set_search_text(self, text: str):
-        config = FIELD_TYPES.get(self.field_type, FIELD_TYPES["Своё поле"])
-        if config["multiline"]:
+    def set_search(self, text):
+        cfg = FIELD_TYPES.get(self.field_type, FIELD_TYPES["Своё поле"])
+        if cfg["multiline"]:
             self.search_widget.delete("1.0", "end")
             self.search_widget.insert("1.0", text)
         else:
             self.search_var.set(text)
 
-    def set_replace_text(self, text: str):
+    def set_replace(self, text):
         self.replace_var.set(text)
 
-    def to_dict(self) -> dict:
-        return {
-            "type": self.field_type,
-            "search": self.get_search_text(),
-            "replace": self.get_replace_text(),
-        }
+    def to_dict(self):
+        return {"type": self.field_type, "search": self.get_search(), "replace": self.get_replace()}
 
-    def is_empty(self) -> bool:
-        return not self.get_search_text()
+    def is_empty(self):
+        return not self.get_search()
 
+
+# ══════════════════════════════════════════════════════════════
+#  App
+# ══════════════════════════════════════════════════════════════
 
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.minsize(800, 700)
+        self.minsize(1000, 650)
 
         self.files: list[str] = []
         self.processing = False
         self.cancel_flag = False
         self.all_mappers: list = []
-        self.anon_map: AnonymizationMap | None = None
-
         self.field_rows: list[FieldRow] = []
+        self._last_detect_results: list[dict] = []
+        self._current_file_entities: list = []
 
         self._load_saved_config()
         self._build_ui()
         self._bind_hotkeys()
         self._restore_fields()
 
-    # ── Config ──────────────────────────────────────────────
+    # ── Config ──
 
     def _load_saved_config(self):
         cfg = load_config()
         self._saved_output = cfg.get("output_dir", "")
         self._saved_fields = cfg.get("fields", [])
         if not self._saved_fields:
-            old_company = cfg.get("company_name", "")
-            old_surnames = cfg.get("surnames", "")
-            old_comp_repl = cfg.get("company_replacement", "Northgate Industries Ltd")
-            old_sur_repl = cfg.get("surname_replacement", "Employee #{n}")
-            if old_company:
-                self._saved_fields.append({
-                    "type": "Организация",
-                    "search": old_company,
-                    "replace": old_comp_repl,
-                })
-            if old_surnames:
-                self._saved_fields.append({
-                    "type": "ФИО участники",
-                    "search": old_surnames,
-                    "replace": old_sur_repl,
-                })
+            old_c = cfg.get("company_name", "")
+            old_s = cfg.get("surnames", "")
+            if old_c:
+                self._saved_fields.append({"type": "Организация", "search": old_c, "replace": cfg.get("company_replacement", "Northgate Industries Ltd")})
+            if old_s:
+                self._saved_fields.append({"type": "ФИО участники", "search": old_s, "replace": cfg.get("surname_replacement", "Employee #{n}")})
 
     def _save_current_config(self):
         fields_data = [fr.to_dict() for fr in self.field_rows if not fr.is_empty()]
-        save_config({
-            "output_dir": self.output_var.get(),
-            "fields": fields_data,
-        })
+        save_config({"output_dir": self.output_var.get(), "fields": fields_data})
 
     def _restore_fields(self):
         if self._saved_fields:
             for fd in self._saved_fields:
-                ft = fd.get("type", "Своё поле")
-                row = self._add_field_row(ft)
-                row.set_search_text(fd.get("search", ""))
-                row.set_replace_text(fd.get("replace", ""))
+                row = self._add_field_row(fd.get("type", "Своё поле"))
+                row.set_search(fd.get("search", ""))
+                row.set_replace(fd.get("replace", ""))
         else:
             self._add_field_row("Организация")
             self._add_field_row("ФИО участники")
 
-    # ── UI Build ────────────────────────────────────────────
+    # ── UI ──
 
     def _build_ui(self):
-        # Основной скроллируемый фрейм
-        self.main_frame = ctk.CTkScrollableFrame(
-            self, corner_radius=0,
-            fg_color=COLORS["bg"],
-        )
-        self.main_frame.pack(fill="both", expand=True)
+        # Верхняя панель — заголовок
+        top = ctk.CTkFrame(self, fg_color=C["surface"], height=40, corner_radius=0)
+        top.pack(fill="x")
+        top.pack_propagate(False)
 
-        # ── Заголовок ──
-        header_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["surface"], corner_radius=10)
-        header_frame.pack(fill="x", padx=12, pady=(12, 6))
+        ctk.CTkLabel(top, text="TITAN CLEANER",
+                     font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=C["accent"]).pack(side="left", padx=12)
+        ctk.CTkLabel(top, text="v4.0",
+                     font=ctk.CTkFont(size=11),
+                     text_color=C["text3"]).pack(side="left")
 
-        title_row = ctk.CTkFrame(header_frame, fg_color="transparent")
-        title_row.pack(fill="x", padx=15, pady=10)
+        # Легенда цветов
+        for name, color in LEGEND:
+            ctk.CTkLabel(top, text=f"  {name}", font=ctk.CTkFont(size=10),
+                         text_color=color).pack(side="right", padx=2)
+        ctk.CTkLabel(top, text="Маркеры:", font=ctk.CTkFont(size=10),
+                     text_color=C["text3"]).pack(side="right", padx=(8, 0))
 
-        ctk.CTkLabel(
-            title_row, text="TITAN CLEANER",
-            font=ctk.CTkFont(size=22, weight="bold"),
-            text_color=COLORS["accent"],
-        ).pack(side="left")
+        # Основное тело: две панели
+        body = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
+        body.pack(fill="both", expand=True)
+        body.grid_columnconfigure(0, weight=0, minsize=320)
+        body.grid_columnconfigure(1, weight=1)
+        body.grid_rowconfigure(0, weight=1)
 
-        ctk.CTkLabel(
-            title_row, text="v4.0",
-            font=ctk.CTkFont(size=14),
-            text_color=COLORS["text_secondary"],
-        ).pack(side="left", padx=(8, 0))
+        # ═══ ЛЕВАЯ ПАНЕЛЬ ═══
+        left = ctk.CTkScrollableFrame(body, width=310, fg_color=C["bg"], corner_radius=0)
+        left.grid(row=0, column=0, sticky="nsew")
 
-        ctk.CTkLabel(
-            title_row,
-            text="Анонимизация и деанонимизация документов",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text_secondary"],
-        ).pack(side="right")
+        # -- Файлы --
+        self._section(left, "ФАЙЛЫ")
+        files_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
+        files_frame.pack(fill="x", padx=6, pady=(0, 4))
 
-        # ── Секция: АВТОМАТИЧЕСКИЙ РЕЖИМ ──
-        self._section_card("АВТОМАТИЧЕСКИЙ РЕЖИМ", self.main_frame, icon="")
-        auto_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["surface"], corner_radius=8)
-        auto_frame.pack(fill="x", padx=12, pady=(0, 6))
+        self.file_list = ctk.CTkTextbox(files_frame, height=70, corner_radius=4,
+                                         fg_color=C["input"], text_color=C["text"],
+                                         font=ctk.CTkFont(size=10))
+        self.file_list.pack(fill="x", padx=6, pady=(6, 2))
+        self.file_list.configure(state="disabled")
 
-        ctk.CTkLabel(
-            auto_frame,
-            text="Автоматический поиск всех ФИО, организаций, реквизитов, адресов, телефонов, email",
-            font=ctk.CTkFont(size=11),
-            text_color=COLORS["text_secondary"],
-            wraplength=900,
-        ).pack(anchor="w", padx=12, pady=(8, 4))
+        fb = ctk.CTkFrame(files_frame, fg_color="transparent")
+        fb.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkButton(fb, text="+ Файлы", width=80, height=26,
+                      fg_color=C["blue"], hover_color=C["blue_h"],
+                      font=ctk.CTkFont(size=11),
+                      command=self._add_files).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(fb, text="+ Папка", width=80, height=26,
+                      fg_color=C["blue"], hover_color=C["blue_h"],
+                      font=ctk.CTkFont(size=11),
+                      command=self._add_folder).pack(side="left", padx=(0, 4))
+        ctk.CTkButton(fb, text="Очистить", width=70, height=26,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      font=ctk.CTkFont(size=11),
+                      command=self._clear_files).pack(side="right")
 
-        auto_btns = ctk.CTkFrame(auto_frame, fg_color="transparent")
-        auto_btns.pack(fill="x", padx=12, pady=(0, 10))
+        # -- Замены (сводка) --
+        self._section(left, "ЗАМЕНЫ")
+        self.summary_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
+        self.summary_frame.pack(fill="x", padx=6, pady=(0, 4))
+        self.summary_label = ctk.CTkLabel(self.summary_frame, text="Добавьте файлы для анализа",
+                                           font=ctk.CTkFont(size=11),
+                                           text_color=C["text2"], wraplength=280, anchor="w")
+        self.summary_label.pack(padx=8, pady=6, anchor="w")
 
-        ctk.CTkButton(
-            auto_btns, text="АВТОПОИСК", width=140,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._auto_detect_start,
-        ).pack(side="left", padx=(0, 8))
+        # -- Правила замены --
+        self._section(left, "ПРАВИЛА ЗАМЕНЫ")
+        self.fields_container = ctk.CTkFrame(left, fg_color="transparent")
+        self.fields_container.pack(fill="x", padx=6, pady=(0, 2))
 
-        ctk.CTkButton(
-            auto_btns, text="АВТО-ЗАМЕНА", width=140,
-            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._auto_replace_start,
-        ).pack(side="left")
+        add_btns = ctk.CTkFrame(left, fg_color="transparent")
+        add_btns.pack(fill="x", padx=6, pady=(0, 4))
 
-        # ── Секция: Ручной режим ──
-        self._section_card("РУЧНОЙ РЕЖИМ", self.main_frame)
+        btn_cfg = [
+            ("+ Орг", "Организация", C["m_org"]),
+            ("+ Город", "Город", C["m_city"]),
+            ("+ ФИО подп.", "ФИО подписант", C["m_surname"]),
+            ("+ ФИО уч.", "ФИО участники", C["m_surname"]),
+            ("+ Своё", "Своё поле", C["gray"]),
+        ]
+        for text, ft, color in btn_cfg:
+            ctk.CTkButton(add_btns, text=text, width=58, height=24,
+                          fg_color=color, hover_color=C["gray_h"],
+                          text_color="#000000" if color in (C["m_surname"], C["m_city"]) else C["text"],
+                          font=ctk.CTkFont(size=10),
+                          command=lambda n=ft: self._add_field_row(n)
+                          ).pack(side="left", padx=1)
 
-        self.fields_container = ctk.CTkFrame(
-            self.main_frame, fg_color="transparent",
-        )
-        self.fields_container.pack(fill="x", padx=12, pady=(0, 4))
+        # -- Выделенное (ручное добавление) --
+        self._section(left, "ВЫДЕЛЕННОЕ")
+        sel_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
+        sel_frame.pack(fill="x", padx=6, pady=(0, 4))
 
-        # Кнопки добавления полей
-        add_row = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        add_row.pack(fill="x", padx=12, pady=(0, 8))
+        self.sel_text_label = ctk.CTkLabel(
+            sel_frame, text="Выделите текст в предпросмотре\nи нажмите «Добавить»",
+            font=ctk.CTkFont(size=11), text_color=C["text3"],
+            wraplength=280, justify="left")
+        self.sel_text_label.pack(padx=8, pady=(6, 2), anchor="w")
 
-        ctk.CTkLabel(
-            add_row, text="Добавить:",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text_secondary"],
-        ).pack(side="left", padx=(0, 8))
+        sel_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
+        sel_row.pack(fill="x", padx=8, pady=(2, 2))
 
-        field_colors = {
-            "Город": "#2ecc71",
-            "Организация": "#3498db",
-            "ФИО подписант": "#9b59b6",
-            "ФИО участники": "#e67e22",
-            "Своё поле": "#7f8c8d",
-        }
-        for ft_name in FIELD_TYPES:
-            ctk.CTkButton(
-                add_row, text=f"+ {ft_name}",
-                width=120, height=28,
-                font=ctk.CTkFont(size=11),
-                fg_color=field_colors.get(ft_name, COLORS["card"]),
-                hover_color=COLORS["accent_hover"],
-                command=lambda n=ft_name: self._add_field_row(n),
-            ).pack(side="left", padx=2)
+        self.sel_type_var = ctk.StringVar(value="Организация")
+        ctk.CTkComboBox(sel_row, variable=self.sel_type_var,
+                        values=list(FIELD_TYPES.keys()), width=130,
+                        fg_color=C["input"], border_color=C["border"],
+                        button_color=C["blue"], dropdown_fg_color=C["surface"],
+                        text_color=C["text"], font=ctk.CTkFont(size=11)
+                        ).pack(side="left", padx=(0, 4))
 
-        # ── Секция: Режим PDF ──
-        self._section_card("РЕЖИМ ЗАМЕНЫ В PDF", self.main_frame)
-        pdf_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["surface"], corner_radius=8)
-        pdf_frame.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkButton(sel_row, text="Добавить", width=80, height=26,
+                      fg_color=C["blue"], hover_color=C["blue_h"],
+                      font=ctk.CTkFont(size=11),
+                      command=self._add_selected_text).pack(side="left")
 
+        # -- PDF --
+        self._section(left, "PDF")
+        pdf_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
+        pdf_frame.pack(fill="x", padx=6, pady=(0, 4))
         pdf_inner = ctk.CTkFrame(pdf_frame, fg_color="transparent")
-        pdf_inner.pack(fill="x", padx=12, pady=8)
+        pdf_inner.pack(fill="x", padx=8, pady=6)
 
         self.pdf_mode = ctk.StringVar(value="text")
-        ctk.CTkRadioButton(
-            pdf_inner, text="Текстовая заглушка",
-            variable=self.pdf_mode, value="text",
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-        ).pack(anchor="w")
-
-        stamp_row = ctk.CTkFrame(pdf_inner, fg_color="transparent")
-        stamp_row.pack(anchor="w", pady=(4, 0))
-        ctk.CTkRadioButton(
-            stamp_row, text="Графический штамп:",
-            variable=self.pdf_mode, value="stamp",
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-        ).pack(side="left")
+        ctk.CTkRadioButton(pdf_inner, text="Текст", variable=self.pdf_mode, value="text",
+                           fg_color=C["accent"], font=ctk.CTkFont(size=11)).pack(side="left")
+        ctk.CTkRadioButton(pdf_inner, text="Штамп", variable=self.pdf_mode, value="stamp",
+                           fg_color=C["accent"], font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
 
         self.stamp_var = ctk.StringVar(value="чёрная плашка")
-        stamp_opts = ["чёрная плашка", "ромашка", "замок",
-                      "конфиденциально", "свой PNG..."]
-        self.stamp_combo = ctk.CTkComboBox(
-            stamp_row, variable=self.stamp_var,
-            values=stamp_opts, width=180,
-            fg_color=COLORS["input_bg"],
-            border_color=COLORS["border"],
-            button_color=COLORS["accent"],
-            button_hover_color=COLORS["accent_hover"],
-            dropdown_fg_color=COLORS["surface"],
-            dropdown_hover_color=COLORS["card"],
-            command=self._on_stamp_selected,
-        )
-        self.stamp_combo.pack(side="left", padx=8)
-        self.custom_stamp_path = None
+        ctk.CTkComboBox(pdf_inner, variable=self.stamp_var,
+                        values=["чёрная плашка", "ромашка", "замок", "конфиденциально"],
+                        width=130, fg_color=C["input"], border_color=C["border"],
+                        button_color=C["gray"], dropdown_fg_color=C["surface"],
+                        text_color=C["text"], font=ctk.CTkFont(size=10)).pack(side="left")
 
-        # OCR
-        ocr_row = ctk.CTkFrame(pdf_inner, fg_color="transparent")
-        ocr_row.pack(anchor="w", pady=(6, 0))
+        ocr_row = ctk.CTkFrame(pdf_frame, fg_color="transparent")
+        ocr_row.pack(fill="x", padx=8, pady=(0, 6))
         self.ocr_enabled = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            ocr_row, text="OCR для сканов (Tesseract)",
-            variable=self.ocr_enabled,
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            command=self._on_ocr_toggled,
-        ).pack(side="left")
-        self.ocr_status_label = ctk.CTkLabel(
-            ocr_row, text="",
-            font=ctk.CTkFont(size=11),
-            text_color=COLORS["text_secondary"],
-        )
-        self.ocr_status_label.pack(side="left", padx=12)
-        self._check_tesseract()
+        ctk.CTkCheckBox(ocr_row, text="OCR", variable=self.ocr_enabled,
+                        fg_color=C["blue"], font=ctk.CTkFont(size=11)).pack(side="left")
 
-        # ── Секция: Файлы ──
-        self._section_card("ФАЙЛЫ", self.main_frame)
+        # -- Результат --
+        self._section(left, "РЕЗУЛЬТАТ")
+        out_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
+        out_frame.pack(fill="x", padx=6, pady=(0, 4))
+        out_inner = ctk.CTkFrame(out_frame, fg_color="transparent")
+        out_inner.pack(fill="x", padx=6, pady=6)
+        self.output_var = ctk.StringVar(value=self._saved_output or "./cleaned")
+        ctk.CTkEntry(out_inner, textvariable=self.output_var,
+                     fg_color=C["input"], border_color=C["border"],
+                     text_color=C["text"], font=ctk.CTkFont(size=11)).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(out_inner, text="...", width=30, height=26,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      command=self._browse_output).pack(side="right")
 
-        file_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["surface"], corner_radius=8)
-        file_frame.pack(fill="x", padx=12, pady=(0, 6))
-
-        file_btns = ctk.CTkFrame(file_frame, fg_color="transparent")
-        file_btns.pack(fill="x", padx=12, pady=(8, 4))
-
-        ctk.CTkButton(
-            file_btns, text="Добавить файлы", width=130,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=self._add_files,
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            file_btns, text="Добавить папку", width=130,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=self._add_folder,
-        ).pack(side="left", padx=(0, 6))
-        ctk.CTkButton(
-            file_btns, text="Очистить", width=100,
-            fg_color=COLORS["button_danger"], hover_color="#b02727",
-            command=self._clear_files,
-        ).pack(side="left")
-
-        # Список файлов (используем CTkTextbox как список)
-        self.file_listbox = ctk.CTkTextbox(
-            file_frame, height=90, corner_radius=6,
-            fg_color=COLORS["input_bg"],
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(size=11),
-        )
-        self.file_listbox.pack(fill="x", padx=12, pady=(0, 4))
-        self.file_listbox.configure(state="disabled")
-
-        # Выходная папка
-        out_row = ctk.CTkFrame(file_frame, fg_color="transparent")
-        out_row.pack(fill="x", padx=12, pady=(0, 8))
-
-        ctk.CTkLabel(out_row, text="Результат:", width=80, anchor="w").pack(side="left")
-        self.output_var = ctk.StringVar(
-            value=self._saved_output or "./cleaned"
-        )
-        ctk.CTkEntry(
-            out_row, textvariable=self.output_var,
-            fg_color=COLORS["input_bg"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text"],
-        ).pack(side="left", padx=5, fill="x", expand=True)
-        ctk.CTkButton(
-            out_row, text="Обзор", width=80,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=self._browse_output,
-        ).pack(side="left", padx=(4, 0))
-
-        # ── Прогресс ──
-        self.progress = ctk.CTkProgressBar(
-            self.main_frame, progress_color=COLORS["accent"],
-            fg_color=COLORS["border"], corner_radius=4,
-        )
-        self.progress.pack(fill="x", padx=12, pady=(8, 2))
-        self.progress.set(0)
-
-        self.progress_label = ctk.CTkLabel(
-            self.main_frame, text="",
-            font=ctk.CTkFont(size=11),
-            text_color=COLORS["text_secondary"],
-        )
-        self.progress_label.pack(anchor="w", padx=12)
-
-        # ── Лог ──
-        log_header = ctk.CTkFrame(self.main_frame, fg_color="transparent")
-        log_header.pack(fill="x", padx=12, pady=(8, 2))
-
-        ctk.CTkLabel(
-            log_header, text="Лог",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            text_color=COLORS["text"],
-        ).pack(side="left")
-
-        ctk.CTkButton(
-            log_header, text="Очистить", width=80, height=26,
-            font=ctk.CTkFont(size=11),
-            fg_color=COLORS["button_secondary"],
-            hover_color=COLORS["card"],
-            command=self._clear_log,
-        ).pack(side="right", padx=2)
-        ctk.CTkButton(
-            log_header, text="Удалить файл лога", width=130, height=26,
-            font=ctk.CTkFont(size=11),
-            fg_color=COLORS["button_secondary"],
-            hover_color=COLORS["card"],
-            command=self._delete_log_file,
-        ).pack(side="right", padx=2)
-
-        self.log_text = ctk.CTkTextbox(
-            self.main_frame, height=140, corner_radius=6,
-            fg_color=COLORS["input_bg"],
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(family="Consolas", size=11),
-        )
-        self.log_text.pack(fill="x", padx=12, pady=(0, 6))
+        # -- Лог --
+        self._section(left, "ЛОГ")
+        self.log_text = ctk.CTkTextbox(left, height=80, corner_radius=4,
+                                        fg_color=C["input"], text_color=C["text"],
+                                        font=ctk.CTkFont(family="Consolas", size=10))
+        self.log_text.pack(fill="x", padx=6, pady=(0, 4))
         self.log_text.configure(state="disabled")
-        # Теги для цветного текста
-        self.log_text.tag_config("success", foreground=COLORS["success"])
-        self.log_text.tag_config("warning", foreground=COLORS["warning"])
-        self.log_text.tag_config("error", foreground=COLORS["error"])
-        self.log_text.tag_config("info", foreground=COLORS["info"])
+        self.log_text.tag_config("success", foreground=C["green"])
+        self.log_text.tag_config("warning", foreground=C["m_surname"])
+        self.log_text.tag_config("error", foreground=C["accent"])
+        self.log_text.tag_config("info", foreground=C["blue"])
 
-        # ── Кнопки действий ──
-        action_frame = ctk.CTkFrame(self.main_frame, fg_color=COLORS["surface"], corner_radius=8)
-        action_frame.pack(fill="x", padx=12, pady=(4, 6))
+        # -- Прогресс --
+        self.progress = ctk.CTkProgressBar(left, progress_color=C["accent"],
+                                            fg_color=C["border"], height=8)
+        self.progress.pack(fill="x", padx=6, pady=(0, 2))
+        self.progress.set(0)
+        self.progress_label = ctk.CTkLabel(left, text="", font=ctk.CTkFont(size=10),
+                                            text_color=C["text3"])
+        self.progress_label.pack(anchor="w", padx=8)
 
-        action_inner = ctk.CTkFrame(action_frame, fg_color="transparent")
-        action_inner.pack(padx=12, pady=10)
+        # ═══ ПРАВАЯ ПАНЕЛЬ — ПРЕДПРОСМОТР ═══
+        right = ctk.CTkFrame(body, fg_color=C["surface"], corner_radius=0)
+        right.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
+
+        # Заголовок
+        preview_header = ctk.CTkFrame(right, fg_color="transparent", height=36)
+        preview_header.pack(fill="x", padx=8, pady=(6, 0))
+        preview_header.pack_propagate(False)
+
+        ctk.CTkLabel(preview_header, text="ПРЕДПРОСМОТР",
+                     font=ctk.CTkFont(size=13, weight="bold"),
+                     text_color=C["text"]).pack(side="left")
+
+        self.found_label = ctk.CTkLabel(preview_header, text="",
+                                         font=ctk.CTkFont(size=11),
+                                         text_color=C["text2"])
+        self.found_label.pack(side="right", padx=4)
+
+        # Выбор файла
+        self.preview_file_var = ctk.StringVar(value="")
+        self.preview_file_combo = ctk.CTkComboBox(
+            preview_header, variable=self.preview_file_var, values=[""],
+            width=250, fg_color=C["input"], border_color=C["border"],
+            button_color=C["blue"], dropdown_fg_color=C["surface"],
+            dropdown_hover_color=C["card"], text_color=C["text"],
+            font=ctk.CTkFont(size=11),
+            command=self._on_preview_file_changed)
+        self.preview_file_combo.pack(side="right", padx=4)
+
+        # Текст документа
+        self.preview_text = ctk.CTkTextbox(
+            right, corner_radius=4,
+            fg_color=C["input"], text_color=C["text"],
+            font=ctk.CTkFont(family="Consolas", size=11),
+            wrap="word")
+        self.preview_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
+
+        # Настраиваем теги маркеров
+        for etype, color in MARKER_COLORS.items():
+            self.preview_text.tag_config(f"m_{etype}", foreground="#000000", background=color)
+        self.preview_text.tag_config("page_sep", foreground=C["text3"])
+        self.preview_text.tag_config("sel_highlight", background=C["blue"], foreground="#ffffff")
+
+        # Привязка выделения текста
+        self.preview_text.bind("<<Selection>>", self._on_text_selected)
+        self.preview_text.bind("<ButtonRelease-1>", self._on_text_selected)
+
+        # ═══ НИЖНЯЯ ПАНЕЛЬ — КНОПКИ ═══
+        bottom = ctk.CTkFrame(self, fg_color=C["surface"], height=80, corner_radius=0)
+        bottom.pack(fill="x")
+        bottom.pack_propagate(False)
+
+        btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        btn_row.pack(pady=8)
+
+        # Главные кнопки — одинакового размера
+        btn_w, btn_h = 160, 38
+        self.btn_detect = ctk.CTkButton(
+            btn_row, text="АВТОПОИСК", width=btn_w, height=btn_h,
+            fg_color=C["blue"], hover_color=C["blue_h"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._auto_detect_start)
+        self.btn_detect.pack(side="left", padx=6)
 
         self.btn_process = ctk.CTkButton(
-            action_inner, text="ОБРАБОТАТЬ", width=150, height=40,
-            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-            font=ctk.CTkFont(size=15, weight="bold"),
-            command=self._start_processing,
-        )
+            btn_row, text="ОБРАБОТАТЬ", width=btn_w, height=btn_h,
+            fg_color=C["accent"], hover_color=C["accent_h"],
+            font=ctk.CTkFont(size=13, weight="bold"),
+            command=self._start_processing)
         self.btn_process.pack(side="left", padx=6)
 
-        ctk.CTkButton(
-            action_inner, text="Предпросмотр", width=130, height=40,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            font=ctk.CTkFont(size=13),
-            command=self._preview,
-        ).pack(side="left", padx=6)
-
-        ctk.CTkButton(
-            action_inner, text="Карта замен", width=120, height=40,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            font=ctk.CTkFont(size=13),
-            command=self._show_replacement_map,
-        ).pack(side="left", padx=6)
-
         self.btn_deanon = ctk.CTkButton(
-            action_inner, text="ДЕАНОНИМИЗАЦИЯ", width=170, height=40,
-            fg_color=COLORS["button_success"], hover_color="#009975",
+            btn_row, text="ДЕАНОНИМИЗАЦИЯ", width=btn_w, height=btn_h,
+            fg_color=C["green"], hover_color=C["green_h"],
             font=ctk.CTkFont(size=13, weight="bold"),
-            command=self._deanonymize_start,
-        )
+            command=self._deanon_panel)
         self.btn_deanon.pack(side="left", padx=6)
 
+        # Второстепенные
+        btn_row2 = ctk.CTkFrame(bottom, fg_color="transparent")
+        btn_row2.pack()
+
+        ctk.CTkButton(btn_row2, text="История замен", width=110, height=26,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      font=ctk.CTkFont(size=11),
+                      command=self._show_history).pack(side="left", padx=4)
+        ctk.CTkButton(btn_row2, text="Карта замен", width=100, height=26,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      font=ctk.CTkFont(size=11),
+                      command=self._show_replacement_map).pack(side="left", padx=4)
         self.btn_cancel = ctk.CTkButton(
-            action_inner, text="Отмена", width=100, height=40,
-            fg_color=COLORS["button_danger"], hover_color="#b02727",
-            font=ctk.CTkFont(size=13),
-            state="disabled",
-            command=self._cancel,
-        )
-        self.btn_cancel.pack(side="left", padx=6)
+            btn_row2, text="Отмена", width=80, height=26,
+            fg_color=C["gray"], hover_color=C["accent"],
+            font=ctk.CTkFont(size=11), state="disabled",
+            command=self._cancel)
+        self.btn_cancel.pack(side="left", padx=4)
 
-        # ── Статус-бар ──
+        # ═══ СТАТУС-БАР ═══
+        status = ctk.CTkFrame(self, fg_color=C["card"], height=24, corner_radius=0)
+        status.pack(fill="x")
+        status.pack_propagate(False)
         self.status_var = ctk.StringVar(value="Готов к работе")
-        status_bar = ctk.CTkLabel(
-            self.main_frame, textvariable=self.status_var,
-            font=ctk.CTkFont(size=11),
-            text_color=COLORS["text_secondary"],
-            anchor="w",
-        )
-        status_bar.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkLabel(status, textvariable=self.status_var,
+                     font=ctk.CTkFont(size=10), text_color=C["text2"]).pack(side="left", padx=8)
 
-    def _section_card(self, text: str, parent, icon: str = ""):
-        """Заголовок секции."""
-        lbl = ctk.CTkLabel(
-            parent, text=f"{icon}  {text}" if icon else text,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=COLORS["info"],
-            anchor="w",
-        )
-        lbl.pack(fill="x", padx=16, pady=(10, 2))
+    def _section(self, parent, text):
+        ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=11, weight="bold"),
+                     text_color=C["text2"], anchor="w").pack(fill="x", padx=8, pady=(8, 2))
 
-    def _check_tesseract(self):
-        try:
-            from core.ocr_utils import is_tesseract_available
-            if is_tesseract_available():
-                self.ocr_status_label.configure(
-                    text="Tesseract найден", text_color=COLORS["success"]
-                )
-            else:
-                self.ocr_status_label.configure(
-                    text="Tesseract не установлен", text_color=COLORS["error"]
-                )
-        except Exception:
-            self.ocr_status_label.configure(
-                text="pytesseract не установлен", text_color=COLORS["error"]
-            )
+    # ── Field rows ──
 
-    def _on_ocr_toggled(self):
-        if self.ocr_enabled.get():
-            try:
-                from core.ocr_utils import is_tesseract_available
-                if not is_tesseract_available():
-                    messagebox.showwarning(
-                        "Tesseract не найден",
-                        "Для OCR необходимо установить Tesseract OCR.\n\n"
-                        "Windows: скачайте с github.com/UB-Mannheim/tesseract\n"
-                        "и установите с добавлением в PATH.\n\n"
-                        "Linux: sudo apt install tesseract-ocr tesseract-ocr-rus"
-                    )
-                    self.ocr_enabled.set(False)
-            except ImportError:
-                messagebox.showwarning(
-                    "pytesseract не установлен",
-                    "Установите pytesseract:\n  pip install pytesseract"
-                )
-                self.ocr_enabled.set(False)
-
-    def _add_field_row(self, field_type: str) -> FieldRow:
-        idx = len(self.field_rows)
-        row = FieldRow(
-            self.fields_container, field_type,
-            on_delete=self._remove_field_row, idx=idx
-        )
+    def _add_field_row(self, field_type):
+        row = FieldRow(self.fields_container, field_type, on_delete=self._remove_field_row)
         self.field_rows.append(row)
         return row
 
-    def _remove_field_row(self, row: FieldRow):
+    def _remove_field_row(self, row):
         if row in self.field_rows:
             self.field_rows.remove(row)
 
-    # ── Hotkeys ─────────────────────────────────────────────
+    # ── Hotkeys ──
 
     def _bind_hotkeys(self):
         self.bind_all("<Control-o>", lambda e: self._add_files())
         self.bind_all("<Control-Return>", lambda e: self._start_processing())
         self.bind_all("<Escape>", lambda e: self._cancel())
 
-    # ── File operations ─────────────────────────────────────
+    # ── Files ──
 
     def _add_files(self):
         paths = filedialog.askopenfilenames(
             title="Выберите файлы",
-            filetypes=[
-                ("Документы", "*.docx *.pdf *.xlsx *.xls"),
-                ("Word", "*.docx"),
-                ("PDF", "*.pdf"),
-                ("Excel", "*.xlsx *.xls"),
-                ("Все файлы", "*.*"),
-            ],
-        )
+            filetypes=[("Документы", "*.docx *.pdf *.xlsx *.xls"), ("Все", "*.*")])
+        added = False
         for p in paths:
             if is_valid_file(p) and p not in self.files:
                 self.files.append(p)
-        self._refresh_file_list()
-        self._update_status()
+                added = True
+        if added:
+            self._refresh_file_list()
+            self._update_status()
+            self._auto_detect_start()  # автопоиск при добавлении
 
     def _add_folder(self):
         folder = filedialog.askdirectory(title="Выберите папку")
         if not folder:
             return
-        for root, dirs, filenames in os.walk(folder):
-            for fn in filenames:
+        added = False
+        for root, dirs, fns in os.walk(folder):
+            for fn in fns:
                 fp = os.path.join(root, fn)
                 if is_valid_file(fp) and fp not in self.files:
                     self.files.append(fp)
-        self._refresh_file_list()
-        self._update_status()
+                    added = True
+        if added:
+            self._refresh_file_list()
+            self._update_status()
+            self._auto_detect_start()
 
     def _refresh_file_list(self):
-        self.file_listbox.configure(state="normal")
-        self.file_listbox.delete("1.0", "end")
+        self.file_list.configure(state="normal")
+        self.file_list.delete("1.0", "end")
         for f in self.files:
-            self.file_listbox.insert("end", Path(f).name + "\n")
-        self.file_listbox.configure(state="disabled")
+            self.file_list.insert("end", Path(f).name + "\n")
+        self.file_list.configure(state="disabled")
 
     def _clear_files(self):
         self.files.clear()
+        self._last_detect_results.clear()
         self._refresh_file_list()
         self._update_status()
+        self._clear_preview()
 
     def _browse_output(self):
-        folder = filedialog.askdirectory(title="Папка для результатов")
-        if folder:
-            self.output_var.set(folder)
-
-    def _on_stamp_selected(self, choice=None):
-        if self.stamp_var.get() == "свой PNG...":
-            path = filedialog.askopenfilename(
-                title="Выберите PNG-штамп",
-                filetypes=[("PNG", "*.png"), ("Все файлы", "*.*")],
-            )
-            if path:
-                self.custom_stamp_path = path
-                self.stamp_var.set(f"Свой: {Path(path).name}")
-            else:
-                self.stamp_var.set("чёрная плашка")
-
-    # ── Logging ─────────────────────────────────────────────
-
-    def _log(self, message: str, tag: str = "info"):
-        self.log_text.configure(state="normal")
-        self.log_text.insert("end", message + "\n", tag)
-        self.log_text.see("end")
-        self.log_text.configure(state="disabled")
-        logger.info(message)
-
-    def _clear_log(self):
-        self.log_text.configure(state="normal")
-        self.log_text.delete("1.0", "end")
-        self.log_text.configure(state="disabled")
-
-    def _delete_log_file(self):
-        from core.utils import get_app_dir
-        log_path = get_app_dir() / 'cleaner.log'
-        if not log_path.exists():
-            messagebox.showinfo("Лог", "Файл лога не найден.")
-            return
-        if not messagebox.askyesno(
-            "Удалить лог",
-            f"Удалить файл лога?\n{log_path}"
-        ):
-            return
-        try:
-            for handler in logger.handlers[:]:
-                if isinstance(handler, logging.FileHandler):
-                    handler.close()
-                    logger.removeHandler(handler)
-            log_path.unlink()
-            self._clear_log()
-            fh = logging.FileHandler(str(log_path), encoding='utf-8')
-            fh.setLevel(logging.DEBUG)
-            fh.setFormatter(logging.Formatter(
-                '%(asctime)s [%(levelname)s] %(message)s', '%Y-%m-%d %H:%M:%S'
-            ))
-            logger.addHandler(fh)
-            self._log("Файл лога удалён и пересоздан.", "info")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось удалить лог:\n{e}")
+        f = filedialog.askdirectory(title="Папка результатов")
+        if f:
+            self.output_var.set(f)
 
     def _update_status(self):
         n = len(self.files)
-        docx_count = sum(1 for f in self.files if f.lower().endswith('.docx'))
-        pdf_count = sum(1 for f in self.files if f.lower().endswith('.pdf'))
-        xlsx_count = sum(1 for f in self.files if f.lower().endswith(('.xlsx', '.xls')))
-        parts = f"Файлов: {n} (DOCX: {docx_count}, PDF: {pdf_count}"
-        if xlsx_count:
-            parts += f", Excel: {xlsx_count}"
-        parts += ")"
-        self.status_var.set(parts)
+        dc = sum(1 for f in self.files if f.lower().endswith('.docx'))
+        pc = sum(1 for f in self.files if f.lower().endswith('.pdf'))
+        xc = sum(1 for f in self.files if f.lower().endswith(('.xlsx', '.xls')))
+        self.status_var.set(f"Файлов: {n}  (DOCX:{dc}  PDF:{pc}  Excel:{xc})")
 
-    # ── Build replacement rules ─────────────────────────────
+    # ── Logging ──
 
-    def _build_replacement_rules(self) -> list[dict]:
+    def _log(self, msg, tag="info"):
+        self.log_text.configure(state="normal")
+        self.log_text.insert("end", msg + "\n", tag)
+        self.log_text.see("end")
+        self.log_text.configure(state="disabled")
+        logger.info(msg)
+
+    # ── Preview ──
+
+    def _clear_preview(self):
+        self.preview_text.configure(state="normal")
+        self.preview_text.delete("1.0", "end")
+        self.preview_text.configure(state="disabled")
+        self.found_label.configure(text="")
+        self.preview_file_combo.configure(values=[""])
+        self.preview_file_var.set("")
+
+    def _show_preview(self, all_results):
+        """Показывает текст первого файла с подсветкой."""
+        self._last_detect_results = all_results
+        file_names = [Path(r["filepath"]).name for r in all_results]
+        self.preview_file_combo.configure(values=file_names)
+        if file_names:
+            self.preview_file_var.set(file_names[0])
+            self._render_file_preview(all_results[0])
+
+        # Обновляем сводку замен
+        total = 0
+        type_counts = {}
+        for res in all_results:
+            for e in res.get("entities", []):
+                total += 1
+                type_counts[e.entity_type] = type_counts.get(e.entity_type, 0) + 1
+
+        parts = [f"Всего: {total}"]
+        for etype, count in sorted(type_counts.items(), key=lambda x: -x[1]):
+            parts.append(f"{get_type_name(etype)}: {count}")
+        self.summary_label.configure(text="  |  ".join(parts))
+        self.found_label.configure(text=f"Найдено: {total}")
+
+    def _on_preview_file_changed(self, choice=None):
+        fname = self.preview_file_var.get()
+        for r in self._last_detect_results:
+            if Path(r["filepath"]).name == fname:
+                self._render_file_preview(r)
+                return
+
+    def _render_file_preview(self, result):
+        """Рендерит текст документа с подсветкой маркеров."""
+        self.preview_text.configure(state="normal")
+        self.preview_text.delete("1.0", "end")
+
+        pages = result.get("pages", {})
+        entities = result.get("entities", [])
+        full_text = result.get("text", "")
+        self._current_file_entities = entities
+
+        if not pages and full_text:
+            pages = {1: full_text}
+
+        if not pages:
+            self.preview_text.insert("end", "(нет текста)")
+            self.preview_text.configure(state="disabled")
+            return
+
+        text_offset = 0
+        for page_num in sorted(pages.keys()):
+            page_text = pages[page_num]
+            if not page_text.strip():
+                text_offset += len(page_text)
+                continue
+
+            if page_num > 1 or len(pages) > 1:
+                self.preview_text.insert("end", f"\n── стр. {page_num} ──\n", "page_sep")
+
+            page_start = text_offset
+            page_end = text_offset + len(page_text)
+            page_entities = sorted(
+                [e for e in entities if e.start >= page_start and e.end <= page_end],
+                key=lambda e: e.start)
+
+            pos = 0
+            for e in page_entities:
+                local_start = e.start - page_start
+                local_end = e.end - page_start
+                if local_start < pos:
+                    continue
+                if local_start > pos:
+                    self.preview_text.insert("end", page_text[pos:local_start])
+                tag = f"m_{e.entity_type}"
+                self.preview_text.insert("end", page_text[local_start:local_end], tag)
+                pos = local_end
+
+            if pos < len(page_text):
+                self.preview_text.insert("end", page_text[pos:])
+
+            text_offset += len(page_text)
+
+        self.preview_text.configure(state="disabled")
+
+    def _on_text_selected(self, event=None):
+        """Обработка выделения текста в предпросмотре."""
+        try:
+            sel = self.preview_text.selection_get()
+            sel = sel.strip()
+            if sel and len(sel) > 1:
+                self.sel_text_label.configure(
+                    text=f"«{sel[:60]}{'...' if len(sel) > 60 else ''}»",
+                    text_color=C["text"])
+                self._pending_selection = sel
+            else:
+                self._pending_selection = None
+        except (tk.TclError, Exception):
+            self._pending_selection = None
+
+    def _add_selected_text(self):
+        """Добавляет выделенный текст как правило замены."""
+        sel = getattr(self, '_pending_selection', None)
+        if not sel:
+            messagebox.showinfo("Выделение", "Выделите текст в предпросмотре мышкой.")
+            return
+        ft = self.sel_type_var.get()
+        row = self._add_field_row(ft)
+        row.set_search(sel)
+        self.sel_text_label.configure(text=f"Добавлено: «{sel[:40]}»", text_color=C["green"])
+        self._pending_selection = None
+
+    # ── Auto-detect ──
+
+    def _auto_detect_start(self):
+        if not self.files:
+            return
+        self._log("Автопоиск...", "info")
+        self.status_var.set("Автопоиск...")
+        self.btn_detect.configure(state="disabled")
+        thread = threading.Thread(target=self._auto_detect_worker, daemon=True)
+        thread.start()
+
+    def _auto_detect_worker(self):
+        _reset_counters()
+        _replacement_cache.clear()
+        results = []
+        for fp in self.files:
+            r = auto_detect_in_file(fp)
+            results.append(r)
+            n = len(r.get("entities", []))
+            fname = Path(fp).name
+            if r.get("error"):
+                self.after(0, lambda m=f"X {fname}: {r['error']}": self._log(m, "error"))
+            else:
+                self.after(0, lambda m=f"  {fname}: {n} сущностей": self._log(m, "info"))
+
+        self.after(0, lambda: self._show_preview(results))
+        self.after(0, lambda: self.status_var.set("Автопоиск завершён"))
+        self.after(0, lambda: self.btn_detect.configure(state="normal"))
+
+    # ── Build rules ──
+
+    def _build_replacement_rules(self):
         rules = []
         self.all_mappers = []
-        self.anon_map = AnonymizationMap()
-
         for row in self.field_rows:
             if row.is_empty():
                 continue
-
-            search = row.get_search_text()
-            replace = row.get_replace_text()
-            ft = row.field_type
-
+            search, replace, ft = row.get_search(), row.get_replace(), row.field_type
             if ft == "Организация":
-                patterns = build_company_patterns(search)
-                rules.append({
-                    "patterns": patterns,
-                    "replacement": replace,
-                    "type": "company",
-                })
-                self.anon_map.add(search, replace)
-
+                rules.append({"patterns": build_company_patterns(search), "replacement": replace, "type": "company"})
             elif ft == "Город":
-                patterns = build_city_patterns(search)
-                rules.append({
-                    "patterns": patterns,
-                    "replacement": replace,
-                    "type": "city",
-                })
-                self.anon_map.add(search, replace)
-
+                rules.append({"patterns": build_city_patterns(search), "replacement": replace, "type": "city"})
             elif ft == "ФИО подписант":
-                sp = SurnamePattern(search, search_with_initials=True,
-                                    search_feminine=True)
-                patterns = sp.get_all_patterns_sorted()
-                rules.append({
-                    "patterns": patterns,
-                    "replacement": replace,
-                    "type": "signatory",
-                })
-                self.anon_map.add(search, replace)
-
+                sp = SurnamePattern(search, search_with_initials=True, search_feminine=True)
+                rules.append({"patterns": sp.get_all_patterns_sorted(), "replacement": replace, "type": "signatory"})
             elif ft == "ФИО участники":
                 mapper = ReplacementMapper(replace)
                 self.all_mappers.append(mapper)
-                surname_patterns = []
+                pats = []
                 for line in search.split('\n'):
-                    line = line.strip()
-                    if not line:
-                        continue
-                    for surname in line.split(','):
-                        surname = surname.strip()
-                        if surname:
-                            sp = SurnamePattern(
-                                surname,
-                                search_with_initials=True,
-                                search_feminine=True,
-                            )
-                            surname_patterns.extend(
-                                sp.get_all_patterns_sorted()
-                            )
-                if surname_patterns:
-                    rules.append({
-                        "patterns": surname_patterns,
-                        "mapper": mapper,
-                        "type": "surnames",
-                    })
-
+                    for s in line.strip().split(','):
+                        s = s.strip()
+                        if s:
+                            sp = SurnamePattern(s, search_with_initials=True, search_feminine=True)
+                            pats.extend(sp.get_all_patterns_sorted())
+                if pats:
+                    rules.append({"patterns": pats, "mapper": mapper, "type": "surnames"})
             elif ft == "Своё поле":
-                patterns = build_custom_patterns(search)
-                rules.append({
-                    "patterns": patterns,
-                    "replacement": replace,
-                    "type": "custom",
-                })
-                self.anon_map.add(search, replace)
-
+                rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "custom"})
         return rules
 
-    def _get_stamp_path(self) -> str | None:
-        if self.custom_stamp_path:
-            return self.custom_stamp_path
+    def _collect_mapping_list(self, rules):
+        """Собирает список маппингов из правил для сохранения в БД."""
+        result = []
+        for rule in rules:
+            if "mapper" in rule:
+                for orig, repl in rule["mapper"].get_map().items():
+                    result.append({"original": orig, "pseudonym": repl, "entity_type": rule.get("type", "")})
+            elif "replacement" in rule:
+                for pat in rule["patterns"]:
+                    result.append({"original": pat.pattern, "pseudonym": rule["replacement"], "entity_type": rule.get("type", "")})
+        # Для автозамены — из entities
+        for res in self._last_detect_results:
+            for e in res.get("entities", []):
+                result.append({"original": e.text, "pseudonym": e.replacement, "entity_type": e.entity_type})
+        # Убираем дубли
+        seen = set()
+        unique = []
+        for m in result:
+            key = (m["original"].lower(), m["pseudonym"])
+            if key not in seen:
+                seen.add(key)
+                unique.append(m)
+        return unique
+
+    def _get_stamp_path(self):
         stamp_name = self.stamp_var.get()
-        if stamp_name in ("чёрная плашка", "") or stamp_name.startswith("Свой:"):
-            if stamp_name.startswith("Свой:"):
-                return self.custom_stamp_path
+        if stamp_name == "чёрная плашка":
             return None
         assets_dir = get_assets_dir()
-        stamp_map = {
-            "ромашка": "daisy.png",
-            "замок": "lock.png",
-            "конфиденциально": "confidential.png",
-        }
+        stamp_map = {"ромашка": "daisy.png", "замок": "lock.png", "конфиденциально": "confidential.png"}
         fn = stamp_map.get(stamp_name)
         if fn:
             p = assets_dir / "stamps" / fn
@@ -1005,20 +910,16 @@ class App(ctk.CTk):
                 return str(p)
         return None
 
-    # ── Processing ──────────────────────────────────────────
+    # ── Processing ──
 
-    def _validate(self) -> bool:
-        has_data = any(not row.is_empty() for row in self.field_rows)
-        if not has_data:
-            messagebox.showwarning(
-                "Внимание",
-                "Добавьте хотя бы одно поле для замены и заполните его."
-            )
+    def _validate(self):
+        has_rules = any(not r.is_empty() for r in self.field_rows)
+        has_auto = bool(self._last_detect_results and any(r.get("entities") for r in self._last_detect_results))
+        if not has_rules and not has_auto:
+            messagebox.showwarning("Внимание", "Нет правил замены.\nЗапустите автопоиск или добавьте правила вручную.")
             return False
         if not self.files:
-            messagebox.showwarning(
-                "Внимание", "Добавьте файлы для обработки."
-            )
+            messagebox.showwarning("Внимание", "Добавьте файлы.")
             return False
         return True
 
@@ -1027,7 +928,6 @@ class App(ctk.CTk):
             return
         if not self._validate():
             return
-
         self._save_current_config()
         self.processing = True
         self.cancel_flag = False
@@ -1035,1005 +935,417 @@ class App(ctk.CTk):
         self.btn_cancel.configure(state="normal")
         self.progress.set(0)
 
-        thread = threading.Thread(target=self._process_files, daemon=True)
+        # Определяем режим: ручные правила или автозамена
+        has_rules = any(not r.is_empty() for r in self.field_rows)
+        if has_rules:
+            thread = threading.Thread(target=self._process_manual, daemon=True)
+        else:
+            thread = threading.Thread(target=self._process_auto, daemon=True)
         thread.start()
 
     def _cancel(self):
         if self.processing:
             self.cancel_flag = True
-            self._log("Отмена обработки...", "warning")
+            self._log("Отмена...", "warning")
 
-    def _process_files(self):
-        replacement_rules = self._build_replacement_rules()
+    def _process_manual(self):
+        """Обработка с ручными правилами."""
+        rules = self._build_replacement_rules()
         output_dir = self.output_var.get()
-
         try:
             ensure_output_dir(output_dir)
         except Exception as e:
-            self.after(0, lambda: self._log(
-                f"Ошибка создания папки: {e}", "error"
-            ))
-            self._finish_processing()
+            self.after(0, lambda: self._log(f"Ошибка папки: {e}", "error"))
+            self._finish()
             return
 
+        db = SessionDB()
+        db.start_session()
         total_matches = {}
-        file_count = len(self.files)
+        n = len(self.files)
 
-        for i, filepath in enumerate(self.files):
+        for i, fp in enumerate(self.files):
             if self.cancel_flag:
-                self.after(0, lambda: self._log(
-                    "Обработка отменена.", "warning"
-                ))
                 break
+            fn = Path(fp).name
+            ext = Path(fp).suffix.lower()
+            out = str(Path(output_dir) / fn)
+            if os.path.abspath(fp) == os.path.abspath(out):
+                out = str(Path(output_dir) / f"{Path(fp).stem}_cleaned{ext}")
 
-            filename = Path(filepath).name
-            ext = Path(filepath).suffix.lower()
-            output_path = str(Path(output_dir) / filename)
-
-            if os.path.abspath(filepath) == os.path.abspath(output_path):
-                stem = Path(filepath).stem
-                output_path = str(
-                    Path(output_dir) / f"{stem}_cleaned{ext}"
-                )
-
-            self.after(0, lambda fn=filename: self.progress_label.configure(
-                text=f"Обработка: {fn}"
-            ))
-
+            self.after(0, lambda f=fn: self.progress_label.configure(text=f))
             try:
-                file_size = os.path.getsize(filepath)
-                if file_size > 100 * 1024 * 1024:
-                    self.after(0, lambda fn=filename: self._log(
-                        f"! {fn} — большой файл ({format_file_size(file_size)})",
-                        "warning"
-                    ))
-
                 if ext == '.docx':
-                    result = clean_docx(
-                        filepath, output_path, replacement_rules
-                    )
+                    res = clean_docx(fp, out, rules)
                 elif ext == '.pdf':
-                    ocr_on = self.ocr_enabled.get()
                     if self.pdf_mode.get() == "text":
-                        result = clean_pdf_text_mode(
-                            filepath, output_path, replacement_rules,
-                            ocr_enabled=ocr_on,
-                        )
+                        res = clean_pdf_text_mode(fp, out, rules, ocr_enabled=self.ocr_enabled.get())
                     else:
-                        stamp_path = self._get_stamp_path()
-                        result = clean_pdf_stamp_mode(
-                            filepath, output_path, replacement_rules,
-                            stamp_path=stamp_path,
-                            stamp_type=self.stamp_var.get(),
-                            ocr_enabled=ocr_on,
-                        )
+                        res = clean_pdf_stamp_mode(fp, out, rules, stamp_path=self._get_stamp_path(),
+                                                    stamp_type=self.stamp_var.get(), ocr_enabled=self.ocr_enabled.get())
                 elif ext in ('.xlsx', '.xls'):
-                    result = clean_xlsx(
-                        filepath, output_path, replacement_rules
-                    )
+                    res = clean_xlsx(fp, out, rules)
                 else:
                     continue
 
-                status = result.get("status", "error")
-                matches = result.get("matches", {})
-                err = result.get("error_message")
-
+                matches = res.get("matches", {})
                 for k, v in matches.items():
                     total_matches[k] = total_matches.get(k, 0) + v
+                total_file = sum(matches.values()) if matches else 0
 
-                total_file = sum(matches.values()) if isinstance(matches, dict) else 0
+                # Сохраняем маппинг в БД для этого файла
+                mapping_list = self._collect_mapping_list(rules)
+                db.save_file_mappings(fn, Path(out).name, mapping_list)
 
-                ocr_pgs = result.get("ocr_pages", [])
-                ocr_info = ""
-                if ocr_pgs:
-                    ocr_info = f" (OCR: стр. {', '.join(map(str, ocr_pgs))})"
-
-                if status == "success":
-                    if total_file > 0:
-                        details = ", ".join(
-                            f"{k}: {v}" for k, v in matches.items()
-                        )
-                        msg = f"OK {filename} — {details}{ocr_info}"
-                        self.after(0, lambda m=msg: self._log(m, "success"))
-                    else:
-                        msg = f"! {filename} — 0 вхождений"
-                        self.after(0, lambda m=msg: self._log(m, "warning"))
-                elif status == "warning":
-                    msg = f"! {filename} — {err}"
-                    self.after(0, lambda m=msg: self._log(m, "warning"))
+                if res.get("status") == "success" and total_file > 0:
+                    d = ", ".join(f"{k}:{v}" for k, v in matches.items())
+                    self.after(0, lambda m=f"OK {fn} — {d}": self._log(m, "success"))
                 else:
-                    msg = f"X {filename} — ошибка: {err}"
-                    self.after(0, lambda m=msg: self._log(m, "error"))
-
+                    self.after(0, lambda f=fn: self._log(f"! {f} — 0 замен", "warning"))
             except Exception as e:
-                msg = f"X {filename} — исключение: {e}"
-                self.after(0, lambda m=msg: self._log(m, "error"))
-                logger.exception(f"Error processing {filepath}")
+                self.after(0, lambda m=f"X {fn}: {e}": self._log(m, "error"))
 
-            progress_val = (i + 1) / file_count if file_count else 1
-            self.after(0, lambda v=progress_val: self.progress.set(v))
+            self.after(0, lambda v=(i+1)/n: self.progress.set(v))
 
-        # Сохраняем маппинг замен для mappers (ФИО участники)
-        if self.all_mappers and self.anon_map:
-            for mapper in self.all_mappers:
-                for orig, repl in mapper.get_map().items():
-                    self.anon_map.add(orig, repl)
+        db.close()
+        summary = ", ".join(f"{k}:{v}" for k, v in total_matches.items()) if total_matches else "замен нет"
+        self.after(0, lambda: self._log(f"Готово. {summary}", "info"))
+        self.after(0, lambda: self.progress_label.configure(text=f"Готово. {summary}"))
+        self._finish()
 
-        # Сохраняем маппинг в файл
-        if self.anon_map and self.anon_map.mappings and output_dir:
+    def _process_auto(self):
+        """Обработка с автодетекцией."""
+        output_dir = self.output_var.get()
+        try:
+            ensure_output_dir(output_dir)
+        except Exception as e:
+            self.after(0, lambda: self._log(f"Ошибка папки: {e}", "error"))
+            self._finish()
+            return
+
+        db = SessionDB()
+        db.start_session()
+        total_matches = {}
+        results = self._last_detect_results if self._last_detect_results else []
+
+        # Если автопоиск не был запущен — запускаем
+        if not results:
+            for fp in self.files:
+                results.append(auto_detect_in_file(fp))
+
+        n = len(results)
+        for i, result in enumerate(results):
+            if self.cancel_flag:
+                break
+            fp = result["filepath"]
+            fn = Path(fp).name
+            ext = Path(fp).suffix.lower()
+            out = str(Path(output_dir) / fn)
+            if os.path.abspath(fp) == os.path.abspath(out):
+                out = str(Path(output_dir) / f"{Path(fp).stem}_cleaned{ext}")
+
+            entities = result.get("entities", [])
+            if not entities:
+                self.after(0, lambda f=fn: self._log(f"! {f} — 0 сущностей", "warning"))
+                self.after(0, lambda v=(i+1)/n: self.progress.set(v))
+                continue
+
+            self.after(0, lambda f=fn: self.progress_label.configure(text=f))
+            rules = self._entities_to_rules(entities)
+
             try:
-                map_path = str(Path(output_dir) / "anonymization_map.titan_map.json")
-                p = Path(output_dir)
-                data = {
-                    "version": 1,
-                    "mappings": [
-                        {
-                            "original": self.anon_map.originals[k],
-                            "pseudonym": self.anon_map.mappings[k],
-                        }
-                        for k in self.anon_map.mappings
-                    ],
-                }
-                with open(map_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                self.after(0, lambda mp=map_path: self._log(
-                    f"Карта замен сохранена: {mp}", "info"
-                ))
+                if ext == '.docx':
+                    res = clean_docx(fp, out, rules)
+                elif ext == '.pdf':
+                    res = clean_pdf_text_mode(fp, out, rules)
+                elif ext in ('.xlsx', '.xls'):
+                    res = clean_xlsx(fp, out, rules)
+                else:
+                    continue
+
+                matches = res.get("matches", {})
+                for k, v in matches.items():
+                    total_matches[k] = total_matches.get(k, 0) + v
+                total_file = sum(matches.values()) if matches else 0
+
+                # Маппинг в БД — для каждого файла отдельно
+                mapping_list = [{"original": e.text, "pseudonym": e.replacement, "entity_type": e.entity_type} for e in entities]
+                db.save_file_mappings(fn, Path(out).name, mapping_list)
+
+                if res.get("status") == "success" and total_file > 0:
+                    d = ", ".join(f"{k}:{v}" for k, v in matches.items())
+                    self.after(0, lambda m=f"OK {fn} — {d}": self._log(m, "success"))
+                else:
+                    self.after(0, lambda f=fn: self._log(f"! {f} — 0 замен", "warning"))
             except Exception as e:
-                self.after(0, lambda: self._log(
-                    f"Ошибка сохранения карты замен: {e}", "warning"
-                ))
+                self.after(0, lambda m=f"X {fn}: {e}": self._log(m, "error"))
 
-        # Итог
-        if total_matches:
-            details = ", ".join(f"{k}: {v}" for k, v in total_matches.items())
-            summary = f"Готово. {details}"
-        else:
-            summary = "Готово. Замен не найдено."
-        self.after(0, lambda: self._log(summary, "info"))
-        self.after(0, lambda: self.progress_label.configure(text=summary))
-        self._finish_processing()
+            self.after(0, lambda v=(i+1)/n: self.progress.set(v))
 
-    def _finish_processing(self):
+        db.close()
+        summary = ", ".join(f"{k}:{v}" for k, v in total_matches.items()) if total_matches else "замен нет"
+        self.after(0, lambda: self._log(f"Готово. {summary}", "info"))
+        self.after(0, lambda: self.progress_label.configure(text=f"Готово. {summary}"))
+        self._finish()
+
+    @staticmethod
+    def _entities_to_rules(entities):
+        rules = []
+        seen = set()
+        for e in entities:
+            escaped = re.escape(e.text)
+            key = (escaped, e.replacement)
+            if key in seen:
+                continue
+            seen.add(key)
+            rules.append({"patterns": [re.compile(escaped, re.IGNORECASE)],
+                          "replacement": e.replacement, "type": e.entity_type})
+        rules.sort(key=lambda r: len(r["patterns"][0].pattern), reverse=True)
+        return rules
+
+    def _finish(self):
         self.processing = False
         self.after(0, lambda: self.btn_process.configure(state="normal"))
         self.after(0, lambda: self.btn_cancel.configure(state="disabled"))
 
-    # ── Preview ─────────────────────────────────────────────
+    # ── Deanonymization panel ──
 
-    def _preview(self):
-        if not self._validate():
-            return
-
-        replacement_rules = self._build_replacement_rules()
-
+    def _deanon_panel(self):
         win = ctk.CTkToplevel(self)
-        win.title("Предпросмотр вхождений")
+        win.title("Деанонимизация")
         win.geometry("750x550")
         win.transient(self)
 
-        text = ctk.CTkTextbox(
-            win, corner_radius=6,
-            fg_color=COLORS["input_bg"],
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(family="Consolas", size=11),
-        )
-        text.pack(fill="both", expand=True, padx=12, pady=12)
-        text.tag_config("header", foreground=COLORS["info"])
-        text.tag_config("match", foreground=COLORS["error"])
-        text.tag_config("repl", foreground=COLORS["success"])
+        ctk.CTkLabel(win, text="ДЕАНОНИМИЗАЦИЯ",
+                     font=ctk.CTkFont(size=16, weight="bold"),
+                     text_color=C["green"]).pack(padx=16, pady=(12, 4))
 
-        for filepath in self.files:
-            filename = Path(filepath).name
-            ext = Path(filepath).suffix.lower()
+        # Поиск в базе
+        search_frame = ctk.CTkFrame(win, fg_color=C["surface"], corner_radius=8)
+        search_frame.pack(fill="x", padx=16, pady=4)
 
-            text.insert("end", f"\n{'='*50}\n", "header")
-            text.insert("end", f"{filename}\n", "header")
+        sf_inner = ctk.CTkFrame(search_frame, fg_color="transparent")
+        sf_inner.pack(fill="x", padx=12, pady=8)
 
-            try:
-                if ext == '.docx':
-                    result = preview_docx(filepath, replacement_rules)
-                elif ext == '.pdf':
-                    result = preview_pdf(
-                        filepath, replacement_rules,
-                        ocr_enabled=self.ocr_enabled.get(),
-                    )
-                elif ext in ('.xlsx', '.xls'):
-                    result = preview_xlsx(filepath, replacement_rules)
-                else:
-                    continue
+        ctk.CTkLabel(sf_inner, text="Поиск в базе:", width=100, anchor="w").pack(side="left")
+        search_var = ctk.StringVar()
+        search_entry = ctk.CTkEntry(sf_inner, textvariable=search_var, width=300,
+                                     placeholder_text="имя файла...",
+                                     fg_color=C["input"], border_color=C["border"],
+                                     text_color=C["text"])
+        search_entry.pack(side="left", padx=4, fill="x", expand=True)
 
-                matches = result.get("matches", [])
-                if not matches:
-                    text.insert("end", "  Вхождений не найдено\n")
-                    continue
+        # Список файлов из БД
+        list_frame = ctk.CTkFrame(win, fg_color=C["surface"], corner_radius=8)
+        list_frame.pack(fill="both", expand=True, padx=16, pady=4)
 
-                type_counts = result.get("type_counts", {})
-                counts_str = ", ".join(
-                    f"{k}: {v}" for k, v in type_counts.items()
-                )
-                text.insert("end", f"  {counts_str}\n\n")
+        file_list_text = ctk.CTkTextbox(list_frame, corner_radius=4,
+                                         fg_color=C["input"], text_color=C["text"],
+                                         font=ctk.CTkFont(family="Consolas", size=11))
+        file_list_text.pack(fill="both", expand=True, padx=8, pady=8)
+        file_list_text.tag_config("header", foreground=C["blue"])
+        file_list_text.tag_config("item", foreground=C["text"])
+        file_list_text.tag_config("selected_item", foreground=C["green"])
 
-                for m in matches:
-                    page_info = (
-                        f" (стр. {m['page']})" if 'page' in m else ""
-                    )
-                    ocr_tag = " [OCR]" if m.get('ocr') else ""
-                    text.insert(
-                        "end",
-                        f"  [{m['type']}]{page_info}{ocr_tag} "
-                    )
-                    text.insert("end", m['original'], "match")
-                    text.insert("end", " -> ")
-                    text.insert("end", m['replacement'], "repl")
-                    text.insert(
-                        "end", f"\n  Контекст: {m['context']}\n\n"
-                    )
+        selected_fm_id = [None]  # mutable container
 
-            except Exception as e:
-                text.insert("end", f"  Ошибка: {e}\n")
-
-        text.configure(state="disabled")
-
-    # ── Auto-detect ─────────────────────────────────────────
-
-    def _auto_detect_start(self):
-        if not self.files:
-            messagebox.showwarning("Внимание", "Добавьте файлы для анализа.")
-            return
-        self._log("Автопоиск запущен...", "info")
-        self.status_var.set("Автопоиск...")
-        thread = threading.Thread(target=self._auto_detect_worker, daemon=True)
-        thread.start()
-
-    def _auto_detect_worker(self):
-        all_results = []
-        for filepath in self.files:
-            result = auto_detect_in_file(filepath)
-            all_results.append(result)
-            n = len(result.get("entities", []))
-            fname = Path(filepath).name
-            ocr_tag = " [OCR]" if result.get("used_ocr") else ""
-            if result.get("error"):
-                self.after(0, lambda m=f"X {fname}: {result['error']}":
-                           self._log(m, "error"))
+        def refresh_list(*args):
+            q = search_var.get().strip()
+            files = SessionDB.search_files(q)
+            file_list_text.configure(state="normal")
+            file_list_text.delete("1.0", "end")
+            file_list_text.insert("end",
+                f"{'#':>4}  {'Файл':<30} {'Дата':<20} {'Замен':>6}\n", "header")
+            file_list_text.insert("end", "─" * 70 + "\n", "header")
+            for f in files:
+                line = f"#{f['id']:>3}  {f['source_filename']:<30} {f['created_at']:<20} {f['total_replacements']:>6}\n"
+                file_list_text.insert("end", line, "item")
+            file_list_text.configure(state="disabled")
+            if files:
+                selected_fm_id[0] = files[0]["id"]
             else:
-                self.after(0, lambda m=f"  {fname}: найдено {n} сущностей{ocr_tag}":
-                           self._log(m, "info"))
+                selected_fm_id[0] = None
 
-        self.after(0, lambda: self._show_auto_detect_preview(all_results))
-        self.after(0, lambda: self.status_var.set("Автопоиск завершён"))
+        search_var.trace_add("write", refresh_list)
+        refresh_list()
 
-    def _show_auto_detect_preview(self, all_results: list[dict]):
-        win = ctk.CTkToplevel(self)
-        win.title("Автопоиск — результаты")
-        win.geometry("1000x750")
-        win.minsize(750, 550)
-        win.transient(self)
-
-        self._last_auto_results = all_results
-
-        # Сводка
-        summary_frame = ctk.CTkFrame(win, fg_color=COLORS["surface"], corner_radius=8)
-        summary_frame.pack(fill="x", padx=12, pady=(12, 6))
-
-        global_counts = {}
-        total = 0
-        for res in all_results:
-            for e in res.get("entities", []):
-                global_counts[e.entity_type] = global_counts.get(e.entity_type, 0) + 1
-                total += 1
-
-        summary_text = f"Всего найдено: {total}   |   "
-        parts = []
-        for etype, count in sorted(global_counts.items(), key=lambda x: -x[1]):
-            parts.append(f"{get_type_name(etype)}: {count}")
-        summary_text += "  |  ".join(parts)
-        ctk.CTkLabel(
-            summary_frame, text=summary_text,
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text"],
-            wraplength=950,
-        ).pack(padx=12, pady=8)
-
-        # Двухпанельный вид
-        content = ctk.CTkFrame(win, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=12, pady=6)
-        content.grid_columnconfigure(0, weight=1)
-        content.grid_columnconfigure(1, weight=2)
-        content.grid_rowconfigure(0, weight=1)
-
-        # Левая панель
-        left_frame = ctk.CTkFrame(content, fg_color=COLORS["surface"], corner_radius=8)
-        left_frame.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
-
-        ctk.CTkLabel(
-            left_frame, text="Найденные сущности",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=COLORS["info"],
-        ).pack(anchor="w", padx=10, pady=(8, 4))
-
-        list_text = ctk.CTkTextbox(
-            left_frame, corner_radius=6,
-            fg_color=COLORS["input_bg"],
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(size=11),
-        )
-        list_text.pack(fill="both", expand=True, padx=8, pady=(0, 8))
-        list_text.tag_config("header", foreground=COLORS["info"])
-        list_text.tag_config("item", foreground=COLORS["text_secondary"])
-
-        for etype in sorted(global_counts.keys(),
-                            key=lambda t: global_counts.get(t, 0), reverse=True):
-            type_name = get_type_name(etype)
-            count = global_counts[etype]
-            list_text.insert("end", f"\n{type_name} ({count}):\n", "header")
-
-            seen = set()
-            for res in all_results:
-                for e in res.get("entities", []):
-                    if e.entity_type == etype:
-                        key = e.text.strip()
-                        if key not in seen:
-                            seen.add(key)
-                            list_text.insert(
-                                "end",
-                                f"  {key}  ->  {e.replacement}\n",
-                                "item",
-                            )
-        list_text.configure(state="disabled")
-
-        # Правая панель
-        right_frame = ctk.CTkFrame(content, fg_color=COLORS["surface"], corner_radius=8)
-        right_frame.grid(row=0, column=1, sticky="nsew")
-
-        file_select = ctk.CTkFrame(right_frame, fg_color="transparent")
-        file_select.pack(fill="x", padx=10, pady=(8, 4))
-        ctk.CTkLabel(file_select, text="Файл:").pack(side="left")
-        file_names = [Path(r["filepath"]).name for r in all_results]
-        file_var = ctk.StringVar(value=file_names[0] if file_names else "")
-        file_combo = ctk.CTkComboBox(
-            file_select, variable=file_var,
-            values=file_names, width=300,
-            fg_color=COLORS["input_bg"],
-            border_color=COLORS["border"],
-            button_color=COLORS["accent"],
-            dropdown_fg_color=COLORS["surface"],
-            command=lambda v: show_file_preview(),
-        )
-        file_combo.pack(side="left", padx=8)
-
-        ctk.CTkLabel(
-            right_frame, text="Текст документа (маркер = найденное)",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=COLORS["info"],
-        ).pack(anchor="w", padx=10)
-
-        doc_text = ctk.CTkTextbox(
-            right_frame, corner_radius=6,
-            fg_color=COLORS["input_bg"],
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(family="Consolas", size=10),
-        )
-        doc_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
-
-        # Теги маркеров
-        doc_text.tag_config("marker_surname", foreground="#FFD700", underline=True)
-        doc_text.tag_config("marker_org", foreground="#FF8C00", underline=True)
-        doc_text.tag_config("marker_city", foreground="#00FF7F", underline=True)
-        doc_text.tag_config("marker_requisite", foreground="#87CEEB", underline=True)
-        doc_text.tag_config("marker_contact", foreground="#DDA0DD", underline=True)
-        doc_text.tag_config("marker_address", foreground="#F0E68C", underline=True)
-        doc_text.tag_config("marker_passport", foreground="#FFA07A", underline=True)
-        doc_text.tag_config("marker", foreground="#FFFF00", underline=True)
-        doc_text.tag_config("page_header", foreground=COLORS["accent"])
-
-        MARKER_TAGS = {
-            "surname": "marker_surname",
-            "organization": "marker_org",
-            "city": "marker_city",
-            "inn": "marker_requisite",
-            "ogrn": "marker_requisite",
-            "kpp": "marker_requisite",
-            "bik": "marker_requisite",
-            "account": "marker_requisite",
-            "snils": "marker_passport",
-            "passport": "marker_passport",
-            "phone": "marker_contact",
-            "email": "marker_contact",
-            "url": "marker_contact",
-            "address": "marker_address",
-        }
-
-        def show_file_preview(event=None):
-            doc_text.configure(state="normal")
-            doc_text.delete("1.0", "end")
-
-            fname = file_var.get()
-            result = None
-            for r in all_results:
-                if Path(r["filepath"]).name == fname:
-                    result = r
-                    break
-            if not result:
-                doc_text.configure(state="disabled")
-                return
-
-            pages = result.get("pages", {})
-            entities = result.get("entities", [])
-            full_text = result.get("text", "")
-
-            if not pages:
-                doc_text.insert("end", full_text or "(нет текста)")
-                doc_text.configure(state="disabled")
-                return
-
-            max_pages = 3
-            shown = 0
-            text_offset = 0
-
-            for page_num in sorted(pages.keys()):
-                if shown >= max_pages:
-                    doc_text.insert(
-                        "end",
-                        f"\n... ещё {len(pages) - max_pages} стр. ...\n",
-                        "page_header",
-                    )
-                    break
-
-                page_text = pages[page_num]
-                if not page_text.strip():
-                    text_offset += len(page_text)
-                    continue
-
-                doc_text.insert(
-                    "end",
-                    f"\n── Страница {page_num} ──\n",
-                    "page_header",
-                )
-
-                page_start = text_offset
-                page_end = text_offset + len(page_text)
-                page_entities = [
-                    e for e in entities
-                    if e.start >= page_start and e.end <= page_end
-                ]
-
-                pos = 0
-                for e in sorted(page_entities, key=lambda x: x.start):
-                    local_start = e.start - page_start
-                    local_end = e.end - page_start
-
-                    if local_start < pos:
-                        continue
-
-                    if local_start > pos:
-                        doc_text.insert("end", page_text[pos:local_start])
-
-                    tag = MARKER_TAGS.get(e.entity_type, "marker")
-                    doc_text.insert("end", page_text[local_start:local_end], tag)
-                    pos = local_end
-
-                if pos < len(page_text):
-                    doc_text.insert("end", page_text[pos:])
-
-                text_offset += len(page_text)
-                shown += 1
-
-            doc_text.configure(state="disabled")
-
-        if all_results:
-            show_file_preview()
-
-        # Легенда
-        legend_frame = ctk.CTkFrame(win, fg_color="transparent")
-        legend_frame.pack(fill="x", padx=12, pady=2)
-        legends = [
-            ("ФИО", "#FFD700"), ("Организации", "#FF8C00"),
-            ("Города", "#00FF7F"), ("Реквизиты", "#87CEEB"),
-            ("Контакты", "#DDA0DD"), ("Адреса", "#F0E68C"),
-            ("Документы", "#FFA07A"),
-        ]
-        for name, color in legends:
-            ctk.CTkLabel(
-                legend_frame, text=f" {name} ",
-                font=ctk.CTkFont(size=10),
-                text_color=color,
-            ).pack(side="left", padx=4)
-
-        # Кнопки
-        btn_frame = ctk.CTkFrame(win, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=12, pady=(4, 12))
-
-        def do_auto_replace():
-            win.destroy()
-            self._auto_replace_from_results(all_results)
-
-        ctk.CTkButton(
-            btn_frame, text="АВТО-ЗАМЕНА (заменить всё)",
-            fg_color=COLORS["accent"], hover_color=COLORS["accent_hover"],
-            font=ctk.CTkFont(size=13, weight="bold"),
-            command=do_auto_replace,
-        ).pack(side="left", padx=6)
-
-        ctk.CTkButton(
-            btn_frame, text="Закрыть",
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=win.destroy,
-        ).pack(side="right", padx=6)
-
-    def _auto_replace_start(self):
-        if not self.files:
-            messagebox.showwarning("Внимание", "Добавьте файлы для обработки.")
-            return
-
-        if not messagebox.askyesno(
-            "Авто-замена",
-            "Программа автоматически найдёт и заменит все персональные данные "
-            "и реквизиты во всех файлах.\n\n"
-            "Оригиналы НЕ будут изменены — результаты сохраняются в папку результатов.\n\n"
-            "Продолжить?"
-        ):
-            return
-
-        self._log("Авто-замена: сканирование...", "info")
-        self.status_var.set("Авто-замена...")
-        thread = threading.Thread(target=self._auto_replace_worker, daemon=True)
-        thread.start()
-
-    def _auto_replace_worker(self):
-        all_results = []
-        for filepath in self.files:
-            result = auto_detect_in_file(filepath)
-            all_results.append(result)
-
-        self.after(0, lambda: self._auto_replace_from_results(all_results))
-
-    def _auto_replace_from_results(self, all_results: list[dict]):
-        output_dir = self.output_var.get()
-        try:
-            ensure_output_dir(output_dir)
-        except Exception as e:
-            self._log(f"Ошибка создания папки: {e}", "error")
-            return
-
-        self._save_current_config()
-        self.processing = True
-        self.cancel_flag = False
-        self.btn_process.configure(state="disabled")
-        self.progress.set(0)
-
-        # Создаём маппинг для авто-замены
-        self.anon_map = AnonymizationMap()
-
-        thread = threading.Thread(
-            target=self._auto_replace_process,
-            args=(all_results, output_dir),
-            daemon=True,
-        )
-        thread.start()
-
-    def _auto_replace_process(self, all_results: list[dict], output_dir: str):
-        from core.patterns import build_custom_patterns
-
-        total_matches = {}
-        result_count = len(all_results)
-
-        for i, result in enumerate(all_results):
-            if self.cancel_flag:
-                self.after(0, lambda: self._log("Отменено.", "warning"))
-                break
-
-            filepath = result["filepath"]
-            filename = Path(filepath).name
-            ext = Path(filepath).suffix.lower()
-            output_path = str(Path(output_dir) / filename)
-
-            if os.path.abspath(filepath) == os.path.abspath(output_path):
-                stem = Path(filepath).stem
-                output_path = str(Path(output_dir) / f"{stem}_cleaned{ext}")
-
-            entities = result.get("entities", [])
-            if not entities:
-                self.after(0, lambda fn=filename: self._log(
-                    f"! {fn} — 0 сущностей", "warning"
-                ))
-                progress_val = (i + 1) / result_count if result_count else 1
-                self.after(0, lambda v=progress_val: self.progress.set(v))
-                continue
-
-            self.after(0, lambda fn=filename: self.progress_label.configure(
-                text=f"Авто-замена: {fn}"
-            ))
-
-            # Сохраняем маппинги в anon_map
-            for e in entities:
-                if self.anon_map:
-                    self.anon_map.add(e.text, e.replacement)
-
-            replacement_rules = self._entities_to_rules(entities)
-
+        # Клик по строке для выбора
+        def on_click(event):
             try:
-                if ext == '.docx':
-                    res = clean_docx(filepath, output_path, replacement_rules)
-                elif ext == '.pdf':
-                    res = clean_pdf_text_mode(filepath, output_path, replacement_rules)
-                elif ext in ('.xlsx', '.xls'):
-                    res = clean_xlsx(filepath, output_path, replacement_rules)
-                else:
-                    continue
+                index = file_list_text.index(f"@{event.x},{event.y}")
+                line_num = int(index.split(".")[0])
+                if line_num <= 2:  # заголовок
+                    return
+                q = search_var.get().strip()
+                files = SessionDB.search_files(q)
+                idx = line_num - 3
+                if 0 <= idx < len(files):
+                    selected_fm_id[0] = files[idx]["id"]
+                    # Подсветка
+                    file_list_text.configure(state="normal")
+                    file_list_text.tag_remove("selected_item", "1.0", "end")
+                    file_list_text.tag_add("selected_item", f"{line_num}.0", f"{line_num}.end")
+                    file_list_text.configure(state="disabled")
+                    # Показать маппинг
+                    show_mappings(files[idx]["id"])
+            except Exception:
+                pass
 
-                status = res.get("status", "error")
-                matches = res.get("matches", {})
-                err = res.get("error_message")
+        file_list_text.bind("<Button-1>", on_click)
 
-                for k, v in matches.items():
-                    total_matches[k] = total_matches.get(k, 0) + v
-                total_file = sum(matches.values()) if isinstance(matches, dict) else 0
-
-                if status == "success":
-                    if total_file > 0:
-                        details = ", ".join(f"{k}: {v}" for k, v in matches.items())
-                        msg = f"OK {filename} — {details}"
-                        self.after(0, lambda m=msg: self._log(m, "success"))
-                    else:
-                        msg = f"! {filename} — 0 замен"
-                        self.after(0, lambda m=msg: self._log(m, "warning"))
-                else:
-                    msg = f"X {filename} — {err}"
-                    self.after(0, lambda m=msg: self._log(m, "error"))
-
-            except Exception as e:
-                msg = f"X {filename} — исключение: {e}"
-                self.after(0, lambda m=msg: self._log(m, "error"))
-                logger.exception(f"Auto-replace error: {filepath}")
-
-            progress_val = (i + 1) / result_count if result_count else 1
-            self.after(0, lambda v=progress_val: self.progress.set(v))
-
-        # Сохраняем карту замен
-        if self.anon_map and self.anon_map.mappings:
-            try:
-                map_path = str(Path(output_dir) / "anonymization_map.titan_map.json")
-                data = {
-                    "version": 1,
-                    "mappings": [
-                        {
-                            "original": self.anon_map.originals[k],
-                            "pseudonym": self.anon_map.mappings[k],
-                        }
-                        for k in self.anon_map.mappings
-                    ],
-                }
-                with open(map_path, "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
-                self.after(0, lambda mp=map_path: self._log(
-                    f"Карта замен сохранена: {mp}", "info"
-                ))
-            except Exception as e:
-                self.after(0, lambda: self._log(
-                    f"Ошибка сохранения карты замен: {e}", "warning"
-                ))
-
-        if total_matches:
-            details = ", ".join(f"{k}: {v}" for k, v in total_matches.items())
-            summary = f"Авто-замена завершена. {details}"
-        else:
-            summary = "Авто-замена завершена. Замен не выполнено."
-        self.after(0, lambda: self._log(summary, "info"))
-        self.after(0, lambda: self.progress_label.configure(text=summary))
-        self._finish_processing()
-
-    @staticmethod
-    def _entities_to_rules(entities: list) -> list[dict]:
-        import re as _re
-        rules = []
-        seen = set()
-
-        for e in entities:
-            text_escaped = _re.escape(e.text)
-            key = (text_escaped, e.replacement)
-            if key in seen:
-                continue
-            seen.add(key)
-
-            pattern = _re.compile(text_escaped, _re.IGNORECASE)
-            rules.append({
-                "patterns": [pattern],
-                "replacement": e.replacement,
-                "type": e.entity_type,
-            })
-
-        rules.sort(key=lambda r: len(r["patterns"][0].pattern), reverse=True)
-        return rules
-
-    # ── Deanonymization ─────────────────────────────────────
-
-    def _deanonymize_start(self):
-        """Диалог деанонимизации: выбрать файл + карту замен → обратная замена."""
-        win = ctk.CTkToplevel(self)
-        win.title("Деанонимизация")
-        win.geometry("650x400")
-        win.transient(self)
-
-        ctk.CTkLabel(
-            win, text="ДЕАНОНИМИЗАЦИЯ ДОКУМЕНТА",
-            font=ctk.CTkFont(size=16, weight="bold"),
-            text_color=COLORS["accent"],
-        ).pack(padx=16, pady=(16, 4))
-
-        ctk.CTkLabel(
-            win,
-            text="Загрузите анонимизированный (или изменённый ИИ) документ\n"
-                 "и карту замен (.titan_map.json) для обратной замены.",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text_secondary"],
-            justify="center",
-        ).pack(padx=16, pady=(0, 12))
-
-        # Файл документа
-        doc_frame = ctk.CTkFrame(win, fg_color=COLORS["surface"], corner_radius=8)
-        doc_frame.pack(fill="x", padx=16, pady=4)
-
-        doc_inner = ctk.CTkFrame(doc_frame, fg_color="transparent")
-        doc_inner.pack(fill="x", padx=12, pady=10)
-
-        ctk.CTkLabel(doc_inner, text="Документ:", width=100, anchor="w").pack(side="left")
-        doc_var = ctk.StringVar()
-        doc_entry = ctk.CTkEntry(
-            doc_inner, textvariable=doc_var,
-            fg_color=COLORS["input_bg"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text"],
-        )
-        doc_entry.pack(side="left", fill="x", expand=True, padx=5)
-
-        def browse_doc():
-            path = filedialog.askopenfilename(
-                title="Выберите документ для деанонимизации",
-                filetypes=[
-                    ("Документы", "*.docx *.pdf *.xlsx *.xls"),
-                    ("Все файлы", "*.*"),
-                ],
-            )
-            if path:
-                doc_var.set(path)
-                # Автоподбор карты замен
-                p = Path(path)
-                auto_map = p.parent / "anonymization_map.titan_map.json"
-                if auto_map.exists() and not map_var.get():
-                    map_var.set(str(auto_map))
-                else:
-                    per_file_map = p.parent / f"{p.stem}.titan_map.json"
-                    if per_file_map.exists() and not map_var.get():
-                        map_var.set(str(per_file_map))
-
-        ctk.CTkButton(
-            doc_inner, text="Обзор", width=80,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=browse_doc,
-        ).pack(side="left")
-
-        # Карта замен
-        map_frame = ctk.CTkFrame(win, fg_color=COLORS["surface"], corner_radius=8)
+        # Маппинг выбранного файла
+        map_frame = ctk.CTkFrame(win, fg_color=C["surface"], corner_radius=8)
         map_frame.pack(fill="x", padx=16, pady=4)
 
-        map_inner = ctk.CTkFrame(map_frame, fg_color="transparent")
-        map_inner.pack(fill="x", padx=12, pady=10)
+        map_text = ctk.CTkTextbox(map_frame, height=100, corner_radius=4,
+                                   fg_color=C["input"], text_color=C["text"],
+                                   font=ctk.CTkFont(family="Consolas", size=10))
+        map_text.pack(fill="x", padx=8, pady=8)
+        map_text.tag_config("pseudo", foreground=C["m_org"])
+        map_text.tag_config("arrow", foreground=C["text3"])
+        map_text.tag_config("orig", foreground=C["green"])
 
-        ctk.CTkLabel(map_inner, text="Карта замен:", width=100, anchor="w").pack(side="left")
-        map_var = ctk.StringVar()
-        ctk.CTkEntry(
-            map_inner, textvariable=map_var,
-            fg_color=COLORS["input_bg"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text"],
-        ).pack(side="left", fill="x", expand=True, padx=5)
+        def show_mappings(fm_id):
+            mappings = SessionDB.get_file_mappings(fm_id)
+            map_text.configure(state="normal")
+            map_text.delete("1.0", "end")
+            for m in mappings[:20]:
+                map_text.insert("end", m["pseudonym"], "pseudo")
+                map_text.insert("end", "  ←  ", "arrow")
+                map_text.insert("end", m["original"] + "\n", "orig")
+            if len(mappings) > 20:
+                map_text.insert("end", f"...ещё {len(mappings) - 20}\n", "arrow")
+            map_text.configure(state="disabled")
 
-        def browse_map():
-            path = filedialog.askopenfilename(
-                title="Выберите карту замен",
-                filetypes=[
-                    ("Titan Map", "*.titan_map.json"),
-                    ("JSON", "*.json"),
-                    ("Все файлы", "*.*"),
-                ],
-            )
-            if path:
-                map_var.set(path)
+        # Файл для деанонимизации
+        doc_frame = ctk.CTkFrame(win, fg_color=C["surface"], corner_radius=8)
+        doc_frame.pack(fill="x", padx=16, pady=4)
+        doc_inner = ctk.CTkFrame(doc_frame, fg_color="transparent")
+        doc_inner.pack(fill="x", padx=12, pady=8)
 
-        ctk.CTkButton(
-            map_inner, text="Обзор", width=80,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=browse_map,
-        ).pack(side="left")
-
-        # Выходной файл
-        out_frame = ctk.CTkFrame(win, fg_color=COLORS["surface"], corner_radius=8)
-        out_frame.pack(fill="x", padx=16, pady=4)
-
-        out_inner = ctk.CTkFrame(out_frame, fg_color="transparent")
-        out_inner.pack(fill="x", padx=12, pady=10)
-
-        ctk.CTkLabel(out_inner, text="Результат:", width=100, anchor="w").pack(side="left")
-        out_var = ctk.StringVar()
-        ctk.CTkEntry(
-            out_inner, textvariable=out_var,
-            placeholder_text="(авто: рядом с документом, _restored)",
-            fg_color=COLORS["input_bg"],
-            border_color=COLORS["border"],
-            text_color=COLORS["text"],
-        ).pack(side="left", fill="x", expand=True, padx=5)
-
-        def browse_out():
-            path = filedialog.asksaveasfilename(
-                title="Сохранить деанонимизированный документ",
-            )
-            if path:
-                out_var.set(path)
-
-        ctk.CTkButton(
-            out_inner, text="Обзор", width=80,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=browse_out,
-        ).pack(side="left")
+        ctk.CTkLabel(doc_inner, text="Документ:", width=80, anchor="w").pack(side="left")
+        doc_var = ctk.StringVar()
+        ctk.CTkEntry(doc_inner, textvariable=doc_var, fg_color=C["input"],
+                     border_color=C["border"], text_color=C["text"]).pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkButton(doc_inner, text="...", width=30, height=26,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      command=lambda: doc_var.set(
+                          filedialog.askopenfilename(title="Документ",
+                              filetypes=[("Документы", "*.docx *.pdf *.xlsx"), ("Все", "*.*")]) or doc_var.get()
+                      )).pack(side="right")
 
         # Результат
-        result_label = ctk.CTkLabel(
-            win, text="",
-            font=ctk.CTkFont(size=12),
-            text_color=COLORS["text_secondary"],
-        )
-        result_label.pack(padx=16, pady=4)
+        result_label = ctk.CTkLabel(win, text="", font=ctk.CTkFont(size=12), text_color=C["text2"])
+        result_label.pack(padx=16, pady=2)
 
-        # Кнопка запуска
         def run_deanon():
+            fm_id = selected_fm_id[0]
             doc_path = doc_var.get().strip()
-            map_path = map_var.get().strip()
-            output_path = out_var.get().strip() or None
-
-            if not doc_path:
-                messagebox.showwarning("Внимание", "Выберите документ.")
+            if not fm_id:
+                messagebox.showwarning("Внимание", "Выберите файл из базы.")
                 return
-            if not map_path:
-                messagebox.showwarning("Внимание", "Выберите карту замен.")
-                return
-            if not Path(doc_path).exists():
-                messagebox.showerror("Ошибка", f"Файл не найден:\n{doc_path}")
-                return
-            if not Path(map_path).exists():
-                messagebox.showerror("Ошибка", f"Карта замен не найдена:\n{map_path}")
+            if not doc_path or not Path(doc_path).exists():
+                messagebox.showwarning("Внимание", "Укажите документ для деанонимизации.")
                 return
 
-            result_label.configure(text="Деанонимизация...", text_color=COLORS["info"])
+            result_label.configure(text="Деанонимизация...", text_color=C["blue"])
             win.update()
 
             try:
-                result = deanonymize_file(doc_path, map_path, output_path)
-                status = result.get("status", "error")
-                out_file = result.get("output_path", "")
-                matches = result.get("matches", {})
-                err = result.get("error_message", "")
+                reverse_rules = SessionDB.get_reverse_rules(fm_id)
+                ext = Path(doc_path).suffix.lower()
+                out_path = str(Path(doc_path).parent / f"{Path(doc_path).stem}_restored{ext}")
 
-                if status == "success":
-                    total_repl = sum(matches.values()) if matches else 0
-                    result_label.configure(
-                        text=f"Готово! Восстановлено замен: {total_repl}\nФайл: {out_file}",
-                        text_color=COLORS["success"],
-                    )
-                    self._log(f"Деанонимизация: {Path(doc_path).name} -> {out_file} ({total_repl} замен)", "success")
-                elif status == "warning":
-                    result_label.configure(text=err, text_color=COLORS["warning"])
-                    self._log(f"Деанонимизация: {err}", "warning")
+                if ext == ".docx":
+                    res = clean_docx(doc_path, out_path, reverse_rules)
+                elif ext == ".pdf":
+                    res = clean_pdf_text_mode(doc_path, out_path, reverse_rules)
+                elif ext in (".xlsx", ".xls"):
+                    res = clean_xlsx(doc_path, out_path, reverse_rules)
                 else:
-                    result_label.configure(text=f"Ошибка: {err}", text_color=COLORS["error"])
-                    self._log(f"Деанонимизация ошибка: {err}", "error")
+                    result_label.configure(text=f"Формат {ext} не поддерживается", text_color=C["accent"])
+                    return
 
+                total = sum(res.get("matches", {}).values()) if res.get("matches") else 0
+                result_label.configure(text=f"Готово! Восстановлено: {total} замен → {out_path}",
+                                        text_color=C["green"])
+                self._log(f"Деанонимизация: {Path(doc_path).name} → {total} замен", "success")
             except Exception as e:
-                result_label.configure(text=f"Ошибка: {e}", text_color=COLORS["error"])
-                self._log(f"Деанонимизация исключение: {e}", "error")
-                logger.exception("Deanonymization error")
+                result_label.configure(text=f"Ошибка: {e}", text_color=C["accent"])
 
-        btn_frame = ctk.CTkFrame(win, fg_color="transparent")
-        btn_frame.pack(fill="x", padx=16, pady=(8, 16))
+        ctk.CTkButton(win, text="ДЕАНОНИМИЗИРОВАТЬ", width=200, height=38,
+                      fg_color=C["green"], hover_color=C["green_h"],
+                      font=ctk.CTkFont(size=14, weight="bold"),
+                      command=run_deanon).pack(pady=(4, 12))
 
-        ctk.CTkButton(
-            btn_frame, text="ДЕАНОНИМИЗИРОВАТЬ", width=200, height=40,
-            fg_color=COLORS["button_success"], hover_color="#009975",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            command=run_deanon,
-        ).pack(side="left", padx=6)
+    # ── History ──
 
-        ctk.CTkButton(
-            btn_frame, text="Закрыть",
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=win.destroy,
-        ).pack(side="right", padx=6)
+    def _show_history(self):
+        win = ctk.CTkToplevel(self)
+        win.title("История замен")
+        win.geometry("700x450")
+        win.transient(self)
 
-    # ── Replacement Map ─────────────────────────────────────
+        text = ctk.CTkTextbox(win, corner_radius=6, fg_color=C["input"],
+                               text_color=C["text"],
+                               font=ctk.CTkFont(family="Consolas", size=11))
+        text.pack(fill="both", expand=True, padx=12, pady=12)
+        text.tag_config("header", foreground=C["blue"])
+
+        sessions = SessionDB.get_all_sessions()
+        text.insert("end", f"{'#':>4}  {'Дата':<20}  {'Замен':>6}  {'Файлы'}\n", "header")
+        text.insert("end", "─" * 80 + "\n", "header")
+        for s in sessions:
+            files_str = s.get("files") or "(нет файлов)"
+            text.insert("end", f"#{s['id']:>3}  {s['created_at']:<20}  {s['total_replacements']:>6}  {files_str}\n")
+        text.configure(state="disabled")
+
+    # ── Replacement map ──
 
     def _show_replacement_map(self):
-        # Собираем все маппинги (из mappers + anon_map)
         all_mappings = {}
         for mapper in self.all_mappers:
             all_mappings.update(mapper.get_map())
-
-        if self.anon_map:
-            for k in self.anon_map.mappings:
-                orig = self.anon_map.originals[k]
-                repl = self.anon_map.mappings[k]
-                all_mappings[orig] = repl
+        for res in self._last_detect_results:
+            for e in res.get("entities", []):
+                all_mappings[e.text] = e.replacement
 
         if not all_mappings:
-            messagebox.showinfo(
-                "Карта замен",
-                "Сначала выполните обработку файлов."
-            )
+            messagebox.showinfo("Карта замен", "Нет данных. Запустите автопоиск или обработку.")
             return
 
         win = ctk.CTkToplevel(self)
-        win.title("Карта замен (сеанс)")
-        win.geometry("650x450")
+        win.title("Карта замен (текущий сеанс)")
+        win.geometry("600x400")
         win.transient(self)
 
-        # Используем текстовое поле вместо Treeview
-        text = ctk.CTkTextbox(
-            win, corner_radius=6,
-            fg_color=COLORS["input_bg"],
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(family="Consolas", size=11),
-        )
+        text = ctk.CTkTextbox(win, corner_radius=6, fg_color=C["input"],
+                               text_color=C["text"],
+                               font=ctk.CTkFont(family="Consolas", size=11))
         text.pack(fill="both", expand=True, padx=12, pady=12)
-
-        text.tag_config("header", foreground=COLORS["info"])
-        text.tag_config("original", foreground=COLORS["error"])
-        text.tag_config("arrow", foreground=COLORS["text_secondary"])
-        text.tag_config("replacement", foreground=COLORS["success"])
-
-        text.insert("end", f"{'Оригинал':<35} {'':>3} {'Замена'}\n", "header")
-        text.insert("end", "─" * 70 + "\n", "header")
+        text.tag_config("orig", foreground=C["accent"])
+        text.tag_config("arrow", foreground=C["text3"])
+        text.tag_config("repl", foreground=C["green"])
 
         for orig, repl in all_mappings.items():
-            text.insert("end", f"{orig:<35}", "original")
-            text.insert("end", " -> ", "arrow")
-            text.insert("end", f"{repl}\n", "replacement")
-
+            text.insert("end", orig, "orig")
+            text.insert("end", "  →  ", "arrow")
+            text.insert("end", repl + "\n", "repl")
         text.configure(state="disabled")
 
-        btn_row = ctk.CTkFrame(win, fg_color="transparent")
-        btn_row.pack(fill="x", padx=12, pady=(0, 12))
-
         def export_csv():
-            path = filedialog.asksaveasfilename(
-                title="Экспорт карты замен",
-                defaultextension=".csv",
-                filetypes=[("CSV", "*.csv")],
-            )
+            path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
             if path:
-                try:
-                    with open(path, 'w', encoding='utf-8-sig',
-                              newline='') as f:
-                        writer = csv.writer(f)
-                        writer.writerow(["Оригинал", "Заменено на"])
-                        for orig, repl in all_mappings.items():
-                            writer.writerow([orig, repl])
-                    messagebox.showinfo(
-                        "Экспорт",
-                        f"Карта замен сохранена:\n{path}"
-                    )
-                except Exception as e:
-                    messagebox.showerror("Ошибка", str(e))
+                with open(path, 'w', encoding='utf-8-sig', newline='') as f:
+                    w = csv.writer(f)
+                    w.writerow(["Оригинал", "Замена"])
+                    for o, r in all_mappings.items():
+                        w.writerow([o, r])
+                messagebox.showinfo("Экспорт", f"Сохранено: {path}")
 
-        ctk.CTkButton(
-            btn_row, text="Экспорт в CSV", width=130,
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=export_csv,
-        ).pack(side="left", padx=4)
-        ctk.CTkButton(
-            btn_row, text="Закрыть",
-            fg_color=COLORS["card"], hover_color="#1a4a8a",
-            command=win.destroy,
-        ).pack(side="right", padx=4)
+        ctk.CTkButton(win, text="Экспорт CSV", width=120, height=28,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      command=export_csv).pack(pady=(0, 12))
 
 
 def main():

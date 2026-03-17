@@ -59,6 +59,7 @@ jobs:
             --hidden-import darkdetect `
             --hidden-import core.english_pseudonyms `
             --hidden-import core.deanonymizer `
+            --hidden-import core.database `
             --collect-all customtkinter `
             main.py
           echo "=== Build result ==="
