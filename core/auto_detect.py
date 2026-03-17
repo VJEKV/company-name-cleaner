@@ -570,28 +570,73 @@ RE_CITY_PREFIX = re.compile(
 )
 
 
-# ── Автозамены (шаблоны заглушек) ───────────────────────────
+# ── Автозамены (английские псевдонимы) ─────────────────────────
+
+from core.english_pseudonyms import (
+    EnglishPseudonymGenerator,
+    ENGLISH_CITIES,
+    ENGLISH_COMPANIES,
+    ENGLISH_SURNAMES,
+    ENGLISH_MALE_FIRST,
+    ENGLISH_FEMALE_FIRST,
+    ENGLISH_MIDDLE_INITIALS,
+)
 
 _surname_counter = 0
 _org_counter = 0
 _city_counter = 0
 _addr_counter = 0
+_inn_counter = 0
+_ogrn_counter = 0
+_kpp_counter = 0
+_bik_counter = 0
+_account_counter = 0
+_snils_counter = 0
+_passport_counter = 0
+_phone_counter = 0
+_email_counter = 0
+_url_counter = 0
+
+_pseudo_gen = EnglishPseudonymGenerator()
 
 
 def _reset_counters():
     global _surname_counter, _org_counter, _city_counter, _addr_counter
+    global _inn_counter, _ogrn_counter, _kpp_counter, _bik_counter
+    global _account_counter, _snils_counter, _passport_counter
+    global _phone_counter, _email_counter, _url_counter, _pseudo_gen
     _surname_counter = 0
     _org_counter = 0
     _city_counter = 0
     _addr_counter = 0
+    _inn_counter = 0
+    _ogrn_counter = 0
+    _kpp_counter = 0
+    _bik_counter = 0
+    _account_counter = 0
+    _snils_counter = 0
+    _passport_counter = 0
+    _phone_counter = 0
+    _email_counter = 0
+    _url_counter = 0
+    _pseudo_gen = EnglishPseudonymGenerator()
 
 
 _replacement_cache: dict[str, str] = {}
 
 
+def _gen_fake_digits(length: int, counter: int) -> str:
+    """Генерирует уникальный правдоподобный номер нужной длины."""
+    base = str(1000000000000000000 + counter * 7919)  # простое число для разброса
+    return base[-length:].zfill(length)
+
+
 def _auto_replacement(entity_type: str, original: str) -> str:
-    """Генерирует автозаглушку для сущности."""
+    """Генерирует уникальную английскую автозаглушку для сущности."""
     global _surname_counter, _org_counter, _city_counter, _addr_counter
+    global _inn_counter, _ogrn_counter, _kpp_counter, _bik_counter
+    global _account_counter, _snils_counter, _passport_counter
+    global _phone_counter, _email_counter, _url_counter
 
     key = f"{entity_type}:{original.strip().lower()}"
     if key in _replacement_cache:
@@ -599,38 +644,78 @@ def _auto_replacement(entity_type: str, original: str) -> str:
 
     if entity_type == ENTITY_SURNAME:
         _surname_counter += 1
-        repl = f"Сотрудник №{_surname_counter}"
+        repl = _pseudo_gen.next_full_name()
+
     elif entity_type == ENTITY_ORGANIZATION:
         _org_counter += 1
-        repl = f'ООО «Организация-{_org_counter}»'
+        repl = _pseudo_gen.next_company()
+
     elif entity_type == ENTITY_CITY:
         _city_counter += 1
-        repl = f"г. Город-{_city_counter}"
+        repl = _pseudo_gen.next_city()
+
     elif entity_type == ENTITY_INN:
-        repl = "ИНН 0000000000"
+        _inn_counter += 1
+        repl = f"TIN {_gen_fake_digits(10, _inn_counter)}"
+
     elif entity_type == ENTITY_OGRN:
-        repl = "ОГРН 0000000000000"
+        _ogrn_counter += 1
+        repl = f"REG {_gen_fake_digits(13, _ogrn_counter)}"
+
     elif entity_type == ENTITY_KPP:
-        repl = "КПП 000000000"
+        _kpp_counter += 1
+        repl = f"TAX {_gen_fake_digits(9, _kpp_counter)}"
+
     elif entity_type == ENTITY_BIK:
-        repl = "БИК 000000000"
+        _bik_counter += 1
+        repl = f"SWIFT {_gen_fake_digits(8, _bik_counter)}"
+
     elif entity_type == ENTITY_ACCOUNT:
-        repl = "00000000000000000000"
+        _account_counter += 1
+        repl = f"ACC {_gen_fake_digits(20, _account_counter)}"
+
     elif entity_type == ENTITY_SNILS:
-        repl = "000-000-000 00"
+        _snils_counter += 1
+        d = _gen_fake_digits(11, _snils_counter)
+        repl = f"SSN {d[:3]}-{d[3:5]}-{d[5:9]}"
+
     elif entity_type == ENTITY_PASSPORT:
-        repl = "серия 00 00 № 000000"
+        _passport_counter += 1
+        d = _gen_fake_digits(10, _passport_counter)
+        repl = f"ID {d[:2]} {d[2:4]} {d[4:]}"
+
     elif entity_type == ENTITY_PHONE:
-        repl = "+7 (000) 000-00-00"
+        _phone_counter += 1
+        d = _gen_fake_digits(10, _phone_counter)
+        repl = f"+44 {d[:3]} {d[3:6]} {d[6:]}"
+
     elif entity_type == ENTITY_EMAIL:
-        repl = "email@example.com"
+        _email_counter += 1
+        surname = ENGLISH_SURNAMES[(_email_counter - 1) % len(ENGLISH_SURNAMES)].lower()
+        first = ENGLISH_MALE_FIRST[(_email_counter - 1) % len(ENGLISH_MALE_FIRST)].lower()
+        domains = ["mail.co.uk", "corp.net", "office.org", "work.com", "biz.co"]
+        domain = domains[(_email_counter - 1) % len(domains)]
+        repl = f"{first}.{surname}@{domain}"
+
     elif entity_type == ENTITY_URL:
-        repl = "https://example.com"
+        _url_counter += 1
+        words = ["northgate", "meridian", "ashford", "sterling", "blackwood",
+                 "crossfield", "whitmore", "oakridge", "pemberton", "kingsford"]
+        tlds = [".co.uk", ".com", ".org", ".net", ".biz"]
+        word = words[(_url_counter - 1) % len(words)]
+        tld = tlds[(_url_counter - 1) % len(tlds)]
+        repl = f"https://{word}{tld}"
+
     elif entity_type == ENTITY_ADDRESS:
         _addr_counter += 1
-        repl = f"ул. Улица, д. {_addr_counter}"
+        streets = ["Baker Street", "Oxford Road", "King's Lane", "Church Way",
+                    "High Street", "Mill Lane", "Park Avenue", "Station Road",
+                    "Victoria Crescent", "Elm Grove"]
+        street = streets[(_addr_counter - 1) % len(streets)]
+        repl = f"{_addr_counter} {street}"
+
     else:
-        repl = "[ЗАГЛУШКА]"
+        repl = "[REDACTED]"
 
     _replacement_cache[key] = repl
     return repl
