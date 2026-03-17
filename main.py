@@ -157,11 +157,42 @@ FIELD_TYPES = {
 }
 
 ENGLISH_OPTIONS = {
-    "Организация": ["Northgate Industries Ltd", "Meridian Solutions Corp",
-                     "Ashford & Partners Inc", "Sterling Dynamics Ltd"],
-    "Город": ["London", "Manchester", "Bristol", "Cambridge", "Oxford"],
-    "ФИО подписант": ["J.A. Smith", "R.M. Johnson", "D.K. Williams"],
-    "ФИО участники": ["Employee #{n}", "Staff Member #{n}"],
+    "Организация": [
+        "Northgate Industries Ltd", "Meridian Solutions Corp",
+        "Ashford & Partners Inc", "Sterling Dynamics Ltd",
+        "Blackwood Engineering Co", "Harrington Global Services",
+        "Crossfield Manufacturing Ltd", "Whitmore Technical Group",
+        "Oakridge Systems Inc", "Pemberton & Hayes Ltd",
+        "Kingsford Logistics Co", "Silverdale Resources Ltd",
+        "Thornhill Enterprises Inc", "Westbrook Capital Ltd",
+        "Briarwood Solutions Group", "Fairmont Industrial Corp",
+        "Eastgate Trading Ltd", "Hillcrest Energy Inc",
+        "Lockwood & Associates", "Crestview Holdings Ltd",
+        "Hartfield Services Corp", "Redstone Technologies Ltd",
+        "Clearwater Industries Inc", "Alderton Group Ltd",
+        "Foxwell Engineering Co", "Brookside Chemicals Ltd",
+        "Glenmore Supply Chain Inc", "Whitehall Consulting Ltd",
+        "Langford Construction Co", "Riverside Petroleum Ltd",
+    ],
+    "Город": [
+        "London", "Manchester", "Bristol", "Cambridge", "Oxford",
+        "Liverpool", "Birmingham", "Edinburgh", "Glasgow", "Leeds",
+        "Sheffield", "Nottingham", "Brighton", "York", "Bath",
+        "Canterbury", "Durham", "Chester", "Exeter", "Lancaster",
+        "Winchester", "Plymouth", "Norwich", "Derby", "Coventry",
+        "Bradford", "Leicester", "Aberdeen", "Dundee", "Inverness",
+    ],
+    "ФИО подписант": [
+        "J.A. Smith", "R.M. Johnson", "D.K. Williams", "M.T. Brown",
+        "S.L. Davis", "P.R. Anderson", "C.J. Taylor", "B.N. Thomas",
+        "A.W. Moore", "G.E. Jackson", "H.F. Martin", "K.D. Lee",
+        "W.P. Thompson", "N.C. White", "E.S. Harris", "T.B. Clark",
+        "L.G. Lewis", "F.H. Robinson", "I.M. Walker", "O.R. Young",
+    ],
+    "ФИО участники": [
+        "Employee #{n}", "Staff Member #{n}", "Specialist #{n}",
+        "Worker #{n}", "Associate #{n}", "Team Member #{n}",
+    ],
 }
 
 logger = setup_logging()
@@ -527,19 +558,41 @@ class App(ctk.CTk):
             command=self._on_preview_file_changed)
         self.preview_file_combo.pack(side="right", padx=4)
 
-        # Текст документа
+        # Пагинация
+        page_nav = ctk.CTkFrame(right, fg_color="transparent", height=30)
+        page_nav.pack(fill="x", padx=8, pady=(2, 0))
+
+        self.btn_prev_page = ctk.CTkButton(
+            page_nav, text="← Пред.", width=80, height=26,
+            fg_color=C["gray"], hover_color=C["gray_h"],
+            font=ctk.CTkFont(size=11), command=self._prev_page)
+        self.btn_prev_page.pack(side="left")
+
+        self.page_label = ctk.CTkLabel(page_nav, text="",
+                                        font=ctk.CTkFont(size=11), text_color=C["text2"])
+        self.page_label.pack(side="left", padx=12)
+
+        self.btn_next_page = ctk.CTkButton(
+            page_nav, text="След. →", width=80, height=26,
+            fg_color=C["gray"], hover_color=C["gray_h"],
+            font=ctk.CTkFont(size=11), command=self._next_page)
+        self.btn_next_page.pack(side="left")
+
+        self._current_page = 0
+        self._total_pages = 0
+
+        # Текст документа — белый фон, чёрный текст
         self.preview_text = ctk.CTkTextbox(
             right, corner_radius=4,
-            fg_color=C["input"], text_color=C["text"],
-            font=ctk.CTkFont(family="Consolas", size=11),
+            fg_color="#ffffff", text_color="#1a1a1a",
+            font=ctk.CTkFont(size=12),
             wrap="word")
         self.preview_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
 
-        # Настраиваем теги маркеров
+        # Теги маркеров — яркие на белом фоне
         for etype, color in MARKER_COLORS.items():
             self.preview_text.tag_config(f"m_{etype}", foreground="#000000", background=color)
-        self.preview_text.tag_config("page_sep", foreground=C["text3"])
-        self.preview_text.tag_config("sel_highlight", background=C["blue"], foreground="#ffffff")
+        self.preview_text.tag_config("page_sep", foreground="#999999")
 
         # Привязка выделения текста
         self.preview_text.bind("<<Selection>>", self._on_text_selected)
@@ -733,10 +786,7 @@ class App(ctk.CTk):
                 return
 
     def _render_file_preview(self, result):
-        """Рендерит текст документа с подсветкой маркеров."""
-        self.preview_text.configure(state="normal")
-        self.preview_text.delete("1.0", "end")
-
+        """Рендерит текст документа с подсветкой маркеров (постранично)."""
         pages = result.get("pages", {})
         entities = result.get("entities", [])
         full_text = result.get("text", "")
@@ -745,45 +795,74 @@ class App(ctk.CTk):
         if not pages and full_text:
             pages = {1: full_text}
 
-        if not pages:
+        # Сохраняем данные для пагинации
+        self._preview_pages = pages
+        self._preview_entities = entities
+        self._page_keys = sorted(pages.keys()) if pages else []
+        self._total_pages = len(self._page_keys)
+        self._current_page = 0
+
+        # Считаем text_offset для каждой страницы
+        self._page_offsets = {}
+        offset = 0
+        for pk in self._page_keys:
+            self._page_offsets[pk] = offset
+            offset += len(pages[pk])
+
+        self._render_current_page()
+
+    def _render_current_page(self):
+        """Рендерит текущую страницу."""
+        self.preview_text.configure(state="normal")
+        self.preview_text.delete("1.0", "end")
+
+        if not self._page_keys:
             self.preview_text.insert("end", "(нет текста)")
             self.preview_text.configure(state="disabled")
+            self.page_label.configure(text="")
             return
 
-        text_offset = 0
-        for page_num in sorted(pages.keys()):
-            page_text = pages[page_num]
-            if not page_text.strip():
-                text_offset += len(page_text)
+        page_key = self._page_keys[self._current_page]
+        page_text = self._preview_pages[page_key]
+        page_start = self._page_offsets[page_key]
+        page_end = page_start + len(page_text)
+
+        page_entities = sorted(
+            [e for e in self._preview_entities if e.start >= page_start and e.end <= page_end],
+            key=lambda e: e.start)
+
+        pos = 0
+        for e in page_entities:
+            local_start = e.start - page_start
+            local_end = e.end - page_start
+            if local_start < pos:
                 continue
+            if local_start > pos:
+                self.preview_text.insert("end", page_text[pos:local_start])
+            tag = f"m_{e.entity_type}"
+            self.preview_text.insert("end", page_text[local_start:local_end], tag)
+            pos = local_end
 
-            if page_num > 1 or len(pages) > 1:
-                self.preview_text.insert("end", f"\n── стр. {page_num} ──\n", "page_sep")
-
-            page_start = text_offset
-            page_end = text_offset + len(page_text)
-            page_entities = sorted(
-                [e for e in entities if e.start >= page_start and e.end <= page_end],
-                key=lambda e: e.start)
-
-            pos = 0
-            for e in page_entities:
-                local_start = e.start - page_start
-                local_end = e.end - page_start
-                if local_start < pos:
-                    continue
-                if local_start > pos:
-                    self.preview_text.insert("end", page_text[pos:local_start])
-                tag = f"m_{e.entity_type}"
-                self.preview_text.insert("end", page_text[local_start:local_end], tag)
-                pos = local_end
-
-            if pos < len(page_text):
-                self.preview_text.insert("end", page_text[pos:])
-
-            text_offset += len(page_text)
+        if pos < len(page_text):
+            self.preview_text.insert("end", page_text[pos:])
 
         self.preview_text.configure(state="disabled")
+        self.preview_text.see("1.0")
+
+        # Обновляем навигацию
+        self.page_label.configure(text=f"Стр. {self._current_page + 1} / {self._total_pages}")
+        self.btn_prev_page.configure(state="normal" if self._current_page > 0 else "disabled")
+        self.btn_next_page.configure(state="normal" if self._current_page < self._total_pages - 1 else "disabled")
+
+    def _prev_page(self):
+        if self._current_page > 0:
+            self._current_page -= 1
+            self._render_current_page()
+
+    def _next_page(self):
+        if self._current_page < self._total_pages - 1:
+            self._current_page += 1
+            self._render_current_page()
 
     def _on_text_selected(self, event=None):
         """Обработка выделения текста в предпросмотре."""
@@ -935,12 +1014,8 @@ class App(ctk.CTk):
         self.btn_cancel.configure(state="normal")
         self.progress.set(0)
 
-        # Определяем режим: ручные правила или автозамена
-        has_rules = any(not r.is_empty() for r in self.field_rows)
-        if has_rules:
-            thread = threading.Thread(target=self._process_manual, daemon=True)
-        else:
-            thread = threading.Thread(target=self._process_auto, daemon=True)
+        # Всегда объединяем ручные правила + автодетект
+        thread = threading.Thread(target=self._process_combined, daemon=True)
         thread.start()
 
     def _cancel(self):
@@ -948,9 +1023,9 @@ class App(ctk.CTk):
             self.cancel_flag = True
             self._log("Отмена...", "warning")
 
-    def _process_manual(self):
-        """Обработка с ручными правилами."""
-        rules = self._build_replacement_rules()
+    def _process_combined(self):
+        """Обработка: объединяет ручные правила + автодетект для каждого файла."""
+        manual_rules = self._build_replacement_rules()
         output_dir = self.output_var.get()
         try:
             ensure_output_dir(output_dir)
@@ -964,6 +1039,11 @@ class App(ctk.CTk):
         total_matches = {}
         n = len(self.files)
 
+        # Индексируем авто-результаты по filepath
+        auto_by_file = {}
+        for r in self._last_detect_results:
+            auto_by_file[r["filepath"]] = r
+
         for i, fp in enumerate(self.files):
             if self.cancel_flag:
                 break
@@ -974,92 +1054,39 @@ class App(ctk.CTk):
                 out = str(Path(output_dir) / f"{Path(fp).stem}_cleaned{ext}")
 
             self.after(0, lambda f=fn: self.progress_label.configure(text=f))
-            try:
-                if ext == '.docx':
-                    res = clean_docx(fp, out, rules)
-                elif ext == '.pdf':
-                    if self.pdf_mode.get() == "text":
-                        res = clean_pdf_text_mode(fp, out, rules, ocr_enabled=self.ocr_enabled.get())
-                    else:
-                        res = clean_pdf_stamp_mode(fp, out, rules, stamp_path=self._get_stamp_path(),
-                                                    stamp_type=self.stamp_var.get(), ocr_enabled=self.ocr_enabled.get())
-                elif ext in ('.xlsx', '.xls'):
-                    res = clean_xlsx(fp, out, rules)
-                else:
-                    continue
 
-                matches = res.get("matches", {})
-                for k, v in matches.items():
-                    total_matches[k] = total_matches.get(k, 0) + v
-                total_file = sum(matches.values()) if matches else 0
+            # Объединяем правила: ручные + авто-entities для этого файла
+            combined_rules = list(manual_rules)  # копия ручных правил
+            auto_result = auto_by_file.get(fp)
+            entities = auto_result.get("entities", []) if auto_result else []
+            if entities:
+                auto_rules = self._entities_to_rules(entities)
+                # Добавляем авто-правила, которых нет в ручных
+                manual_patterns = set()
+                for r in manual_rules:
+                    for p in r["patterns"]:
+                        manual_patterns.add(p.pattern.lower())
+                for ar in auto_rules:
+                    pat = ar["patterns"][0].pattern.lower()
+                    if pat not in manual_patterns:
+                        combined_rules.append(ar)
 
-                # Сохраняем маппинг в БД для этого файла
-                mapping_list = self._collect_mapping_list(rules)
-                db.save_file_mappings(fn, Path(out).name, mapping_list)
-
-                if res.get("status") == "success" and total_file > 0:
-                    d = ", ".join(f"{k}:{v}" for k, v in matches.items())
-                    self.after(0, lambda m=f"OK {fn} — {d}": self._log(m, "success"))
-                else:
-                    self.after(0, lambda f=fn: self._log(f"! {f} — 0 замен", "warning"))
-            except Exception as e:
-                self.after(0, lambda m=f"X {fn}: {e}": self._log(m, "error"))
-
-            self.after(0, lambda v=(i+1)/n: self.progress.set(v))
-
-        db.close()
-        summary = ", ".join(f"{k}:{v}" for k, v in total_matches.items()) if total_matches else "замен нет"
-        self.after(0, lambda: self._log(f"Готово. {summary}", "info"))
-        self.after(0, lambda: self.progress_label.configure(text=f"Готово. {summary}"))
-        self._finish()
-
-    def _process_auto(self):
-        """Обработка с автодетекцией."""
-        output_dir = self.output_var.get()
-        try:
-            ensure_output_dir(output_dir)
-        except Exception as e:
-            self.after(0, lambda: self._log(f"Ошибка папки: {e}", "error"))
-            self._finish()
-            return
-
-        db = SessionDB()
-        db.start_session()
-        total_matches = {}
-        results = self._last_detect_results if self._last_detect_results else []
-
-        # Если автопоиск не был запущен — запускаем
-        if not results:
-            for fp in self.files:
-                results.append(auto_detect_in_file(fp))
-
-        n = len(results)
-        for i, result in enumerate(results):
-            if self.cancel_flag:
-                break
-            fp = result["filepath"]
-            fn = Path(fp).name
-            ext = Path(fp).suffix.lower()
-            out = str(Path(output_dir) / fn)
-            if os.path.abspath(fp) == os.path.abspath(out):
-                out = str(Path(output_dir) / f"{Path(fp).stem}_cleaned{ext}")
-
-            entities = result.get("entities", [])
-            if not entities:
-                self.after(0, lambda f=fn: self._log(f"! {f} — 0 сущностей", "warning"))
+            if not combined_rules:
+                self.after(0, lambda f=fn: self._log(f"! {f} — нет правил", "warning"))
                 self.after(0, lambda v=(i+1)/n: self.progress.set(v))
                 continue
 
-            self.after(0, lambda f=fn: self.progress_label.configure(text=f))
-            rules = self._entities_to_rules(entities)
-
             try:
                 if ext == '.docx':
-                    res = clean_docx(fp, out, rules)
+                    res = clean_docx(fp, out, combined_rules)
                 elif ext == '.pdf':
-                    res = clean_pdf_text_mode(fp, out, rules)
+                    if self.pdf_mode.get() == "text":
+                        res = clean_pdf_text_mode(fp, out, combined_rules, ocr_enabled=self.ocr_enabled.get())
+                    else:
+                        res = clean_pdf_stamp_mode(fp, out, combined_rules, stamp_path=self._get_stamp_path(),
+                                                    stamp_type=self.stamp_var.get(), ocr_enabled=self.ocr_enabled.get())
                 elif ext in ('.xlsx', '.xls'):
-                    res = clean_xlsx(fp, out, rules)
+                    res = clean_xlsx(fp, out, combined_rules)
                 else:
                     continue
 
@@ -1068,9 +1095,28 @@ class App(ctk.CTk):
                     total_matches[k] = total_matches.get(k, 0) + v
                 total_file = sum(matches.values()) if matches else 0
 
-                # Маппинг в БД — для каждого файла отдельно
-                mapping_list = [{"original": e.text, "pseudonym": e.replacement, "entity_type": e.entity_type} for e in entities]
-                db.save_file_mappings(fn, Path(out).name, mapping_list)
+                # Маппинг в БД — для каждого файла
+                mapping_list = []
+                # Из ручных правил
+                for rule in manual_rules:
+                    if "mapper" in rule:
+                        for orig, repl in rule["mapper"].get_map().items():
+                            mapping_list.append({"original": orig, "pseudonym": repl, "entity_type": rule.get("type", "")})
+                    elif "replacement" in rule:
+                        for pat in rule["patterns"]:
+                            mapping_list.append({"original": pat.pattern.replace("\\", ""), "pseudonym": rule["replacement"], "entity_type": rule.get("type", "")})
+                # Из авто-entities
+                for e in entities:
+                    mapping_list.append({"original": e.text, "pseudonym": e.replacement, "entity_type": e.entity_type})
+                # Дедупликация
+                seen = set()
+                unique_mappings = []
+                for m in mapping_list:
+                    key = (m["original"].lower(), m["pseudonym"])
+                    if key not in seen:
+                        seen.add(key)
+                        unique_mappings.append(m)
+                db.save_file_mappings(fn, Path(out).name, unique_mappings)
 
                 if res.get("status") == "success" and total_file > 0:
                     d = ", ".join(f"{k}:{v}" for k, v in matches.items())
