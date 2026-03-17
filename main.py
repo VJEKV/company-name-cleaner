@@ -12,11 +12,40 @@ import logging
 import os
 import sys
 import threading
+import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pathlib import Path
 
-import customtkinter as ctk
+# Логирование ошибок запуска в файл (для --windowed .exe)
+def _log_startup_error(msg):
+    """Записывает ошибку запуска в файл рядом с .exe."""
+    try:
+        if getattr(sys, 'frozen', False):
+            log_path = Path(sys.executable).parent / 'titan_error.log'
+        else:
+            log_path = Path(__file__).parent / 'titan_error.log'
+        with open(log_path, 'a', encoding='utf-8') as f:
+            f.write(f"{msg}\n")
+    except Exception:
+        pass
+
+try:
+    import customtkinter as ctk
+except ImportError as e:
+    _log_startup_error(f"CustomTkinter import error: {e}\n{traceback.format_exc()}")
+    # Показываем ошибку через базовый tkinter
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(
+            "Ошибка запуска",
+            f"Не удалось загрузить CustomTkinter:\n{e}\n\n"
+            "Проверьте файл titan_error.log"
+        )
+    except Exception:
+        pass
+    sys.exit(1)
 
 from core.patterns import build_company_patterns, build_city_patterns, build_custom_patterns
 from core.surnames import SurnamePattern

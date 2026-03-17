@@ -36,10 +36,42 @@ jobs:
         run: |
           $ctkPath = python -c "import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))"
           echo "CTK_PATH=$ctkPath" >> $env:GITHUB_OUTPUT
+          echo "Found customtkinter at: $ctkPath"
+
+      - name: Verify customtkinter assets
+        shell: pwsh
+        run: |
+          $ctkPath = "${{ steps.ctk.outputs.CTK_PATH }}"
+          echo "=== customtkinter directory ==="
+          Get-ChildItem -Path $ctkPath -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize
+          echo "=== JSON theme files ==="
+          Get-ChildItem -Path $ctkPath -Recurse -Filter "*.json" | Select-Object FullName
 
       - name: Build EXE
+        shell: pwsh
         run: |
-          pyinstaller --onefile --windowed --name "TitanCleaner" --add-data "assets\stamps;assets\stamps" --add-data "${{ steps.ctk.outputs.CTK_PATH }};customtkinter" --hidden-import customtkinter --hidden-import darkdetect --hidden-import core.english_pseudonyms --hidden-import core.deanonymizer main.py
+          $ctkPath = "${{ steps.ctk.outputs.CTK_PATH }}"
+          pyinstaller --onefile --windowed `
+            --name "TitanCleaner" `
+            --add-data "assets\stamps;assets\stamps" `
+            --add-data "${ctkPath};customtkinter" `
+            --hidden-import customtkinter `
+            --hidden-import darkdetect `
+            --hidden-import core.english_pseudonyms `
+            --hidden-import core.deanonymizer `
+            --collect-all customtkinter `
+            main.py
+          echo "=== Build result ==="
+          Get-ChildItem dist\TitanCleaner.exe | Format-Table Name, Length
+
+      - name: Prepare portable folder
+        shell: pwsh
+        run: |
+          # Создаём папку для portable-сборки
+          New-Item -ItemType Directory -Path dist\portable\TitanCleaner -Force
+          # Перемещаем .exe
+          Move-Item dist\TitanCleaner.exe dist\portable\TitanCleaner\ -Force
+          echo "EXE moved to portable folder"
 
       - name: Install Tesseract via choco
         run: choco install tesseract --no-progress -y
@@ -48,28 +80,22 @@ jobs:
         shell: pwsh
         run: |
           $src = "C:\Program Files\Tesseract-OCR"
-          $dst = "dist\TitanCleaner\tesseract"
+          $dst = "dist\portable\TitanCleaner\tesseract"
           New-Item -ItemType Directory -Path "$dst\tessdata" -Force
-          # Бинарники
           Copy-Item "$src\tesseract.exe" "$dst\"
           Copy-Item "$src\*.dll" "$dst\"
-          # Языковые данные (eng идёт с choco)
           Copy-Item "$src\tessdata\eng.traineddata" "$dst\tessdata\"
           Copy-Item "$src\tessdata\osd.traineddata" "$dst\tessdata\"
-          # Скачиваем русский язык отдельно
           $rusUrl = "https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata"
           Invoke-WebRequest -Uri $rusUrl -OutFile "$dst\tessdata\rus.traineddata"
-          # Проверка
           Get-ChildItem -Recurse "$dst" | Format-Table Name, Length
 
       - name: Package portable ZIP
         shell: pwsh
         run: |
-          # Move EXE into folder
-          New-Item -ItemType Directory -Path dist\TitanCleaner -Force
-          Move-Item dist\TitanCleaner.exe dist\TitanCleaner\ -Force
-          # Create ZIP
-          Compress-Archive -Path dist\TitanCleaner -DestinationPath dist\TitanCleaner-Portable.zip
+          Compress-Archive -Path dist\portable\TitanCleaner -DestinationPath dist\TitanCleaner-Portable.zip
+          echo "=== Final ZIP ==="
+          Get-ChildItem dist\TitanCleaner-Portable.zip | Format-Table Name, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
