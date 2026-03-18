@@ -1,5 +1,5 @@
 """
-Titan Cleaner v4.0 — портативное GUI-приложение.
+Titan Cleaner v4.1 — портативное GUI-приложение.
 Анонимизация и деанонимизация документов (.docx, .pdf, .xlsx).
 Двухпанельный интерфейс: управление слева, предпросмотр текста справа.
 Маппинг хранится в SQLite базе.
@@ -65,9 +65,30 @@ from core.auto_detect import (
     get_type_name, _reset_counters, _replacement_cache,
 )
 
-APP_TITLE = "Titan Cleaner v4.0"
-WINDOW_WIDTH = 1280
-WINDOW_HEIGHT = 820
+APP_TITLE = "Titan Cleaner v4.1"
+WINDOW_WIDTH = 1440
+WINDOW_HEIGHT = 860
+
+
+def _make_readonly(textbox):
+    """Делает CTkTextbox readonly, но с возможностью выделения мышью и Ctrl+C/Ctrl+A."""
+    inner = textbox._textbox  # внутренний tk.Text виджет
+
+    def _block_input(event):
+        # Разрешаем: Ctrl+C, Ctrl+A
+        if event.state & 0x4:  # Ctrl
+            if event.keysym.lower() in ('c', 'a'):
+                return
+        # Разрешаем навигацию
+        if event.keysym in ('Left', 'Right', 'Up', 'Down', 'Home', 'End',
+                            'Prior', 'Next', 'Shift_L', 'Shift_R',
+                            'Control_L', 'Control_R'):
+            return
+        return "break"
+
+    inner.bind("<Key>", _block_input)
+    inner.bind("<<Paste>>", lambda e: "break")
+    inner.bind("<<Cut>>", lambda e: "break")
 
 # Цвета
 C = {
@@ -307,7 +328,7 @@ class App(ctk.CTk):
         super().__init__()
         self.title(APP_TITLE)
         self.geometry(f"{WINDOW_WIDTH}x{WINDOW_HEIGHT}")
-        self.minsize(1000, 650)
+        self.minsize(1100, 700)
 
         self.files: list[str] = []
         self.processing = False
@@ -316,6 +337,7 @@ class App(ctk.CTk):
         self.field_rows: list[FieldRow] = []
         self._last_detect_results: list[dict] = []
         self._current_file_entities: list = []
+        self._page_marks: dict = {}
 
         self._load_saved_config()
         self._build_ui()
@@ -353,7 +375,7 @@ class App(ctk.CTk):
     # ── UI ──
 
     def _build_ui(self):
-        # Верхняя панель — заголовок
+        # ═══ ВЕРХНЯЯ ПАНЕЛЬ — ЗАГОЛОВОК ═══
         top = ctk.CTkFrame(self, fg_color=C["surface"], height=40, corner_radius=0)
         top.pack(fill="x")
         top.pack_propagate(False)
@@ -361,7 +383,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="TITAN CLEANER",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=C["accent"]).pack(side="left", padx=12)
-        ctk.CTkLabel(top, text="v4.0",
+        ctk.CTkLabel(top, text="v4.1",
                      font=ctk.CTkFont(size=11),
                      text_color=C["text3"]).pack(side="left")
 
@@ -372,15 +394,16 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="Маркеры:", font=ctk.CTkFont(size=10),
                      text_color=C["text3"]).pack(side="right", padx=(8, 0))
 
-        # Основное тело: две панели
+        # ═══ ОСНОВНОЕ ТЕЛО: ТРИ КОЛОНКИ ═══
         body = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
         body.pack(fill="both", expand=True)
-        body.grid_columnconfigure(0, weight=0, minsize=320)
-        body.grid_columnconfigure(1, weight=1)
+        body.grid_columnconfigure(0, weight=0, minsize=250)
+        body.grid_columnconfigure(1, weight=1, minsize=400)
+        body.grid_columnconfigure(2, weight=0, minsize=280)
         body.grid_rowconfigure(0, weight=1)
 
-        # ═══ ЛЕВАЯ ПАНЕЛЬ ═══
-        left = ctk.CTkScrollableFrame(body, width=310, fg_color=C["bg"], corner_radius=0)
+        # ═══ ЛЕВАЯ КОЛОНКА — ФАЙЛЫ, НАСТРОЙКИ, ЛОГ ═══
+        left = ctk.CTkScrollableFrame(body, width=240, fg_color=C["bg"], corner_radius=0)
         left.grid(row=0, column=0, sticky="nsew")
 
         # -- Файлы --
@@ -392,38 +415,244 @@ class App(ctk.CTk):
                                          fg_color=C["input"], text_color=C["text"],
                                          font=ctk.CTkFont(size=10))
         self.file_list.pack(fill="x", padx=6, pady=(6, 2))
-        self.file_list.configure(state="disabled")
+        _make_readonly(self.file_list)
 
         fb = ctk.CTkFrame(files_frame, fg_color="transparent")
         fb.pack(fill="x", padx=6, pady=(0, 6))
-        ctk.CTkButton(fb, text="+ Файлы", width=80, height=26,
+        ctk.CTkButton(fb, text="+ Файлы", width=70, height=24,
                       fg_color=C["blue"], hover_color=C["blue_h"],
-                      font=ctk.CTkFont(size=11),
-                      command=self._add_files).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(fb, text="+ Папка", width=80, height=26,
+                      font=ctk.CTkFont(size=10),
+                      command=self._add_files).pack(side="left", padx=(0, 2))
+        ctk.CTkButton(fb, text="+ Папка", width=70, height=24,
                       fg_color=C["blue"], hover_color=C["blue_h"],
-                      font=ctk.CTkFont(size=11),
-                      command=self._add_folder).pack(side="left", padx=(0, 4))
-        ctk.CTkButton(fb, text="Очистить", width=70, height=26,
+                      font=ctk.CTkFont(size=10),
+                      command=self._add_folder).pack(side="left", padx=(0, 2))
+        ctk.CTkButton(fb, text="Очист.", width=50, height=24,
                       fg_color=C["gray"], hover_color=C["gray_h"],
-                      font=ctk.CTkFont(size=11),
+                      font=ctk.CTkFont(size=10),
                       command=self._clear_files).pack(side="right")
 
         # -- Замены (сводка) --
-        self._section(left, "ЗАМЕНЫ")
+        self._section(left, "СВОДКА")
         self.summary_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
         self.summary_frame.pack(fill="x", padx=6, pady=(0, 4))
-        self.summary_label = ctk.CTkLabel(self.summary_frame, text="Добавьте файлы для анализа",
-                                           font=ctk.CTkFont(size=11),
-                                           text_color=C["text2"], wraplength=280, anchor="w")
-        self.summary_label.pack(padx=8, pady=6, anchor="w")
+        self.summary_label = ctk.CTkLabel(self.summary_frame, text="Добавьте файлы",
+                                           font=ctk.CTkFont(size=10),
+                                           text_color=C["text2"], wraplength=220, anchor="w")
+        self.summary_label.pack(padx=6, pady=4, anchor="w")
+
+        # -- PDF --
+        self._section(left, "PDF")
+        pdf_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
+        pdf_frame.pack(fill="x", padx=6, pady=(0, 4))
+        pdf_inner = ctk.CTkFrame(pdf_frame, fg_color="transparent")
+        pdf_inner.pack(fill="x", padx=6, pady=4)
+
+        self.pdf_mode = ctk.StringVar(value="text")
+        ctk.CTkRadioButton(pdf_inner, text="Текст", variable=self.pdf_mode, value="text",
+                           fg_color=C["accent"], font=ctk.CTkFont(size=10)).pack(side="left")
+        ctk.CTkRadioButton(pdf_inner, text="Штамп", variable=self.pdf_mode, value="stamp",
+                           fg_color=C["accent"], font=ctk.CTkFont(size=10)).pack(side="left", padx=4)
+
+        self.stamp_var = ctk.StringVar(value="чёрная плашка")
+        ctk.CTkComboBox(pdf_inner, variable=self.stamp_var,
+                        values=["чёрная плашка", "ромашка", "замок", "конфиденциально"],
+                        width=120, fg_color=C["input"], border_color=C["border"],
+                        button_color=C["gray"], dropdown_fg_color=C["surface"],
+                        text_color=C["text"], font=ctk.CTkFont(size=9)).pack(side="left", padx=2)
+
+        ocr_row = ctk.CTkFrame(pdf_frame, fg_color="transparent")
+        ocr_row.pack(fill="x", padx=6, pady=(0, 4))
+        self.ocr_enabled = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(ocr_row, text="OCR", variable=self.ocr_enabled,
+                        fg_color=C["blue"], font=ctk.CTkFont(size=10)).pack(side="left")
+
+        # -- Результат --
+        self._section(left, "РЕЗУЛЬТАТ")
+        out_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
+        out_frame.pack(fill="x", padx=6, pady=(0, 4))
+        out_inner = ctk.CTkFrame(out_frame, fg_color="transparent")
+        out_inner.pack(fill="x", padx=6, pady=4)
+        self.output_var = ctk.StringVar(value=self._saved_output or "./cleaned")
+        ctk.CTkEntry(out_inner, textvariable=self.output_var,
+                     fg_color=C["input"], border_color=C["border"],
+                     text_color=C["text"], font=ctk.CTkFont(size=10)).pack(side="left", fill="x", expand=True, padx=(0, 2))
+        ctk.CTkButton(out_inner, text="...", width=26, height=24,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      command=self._browse_output).pack(side="right")
+
+        # -- Лог --
+        self._section(left, "ЛОГ")
+        self.log_text = ctk.CTkTextbox(left, height=100, corner_radius=4,
+                                        fg_color=C["input"], text_color=C["text"],
+                                        font=ctk.CTkFont(family="Consolas", size=9))
+        self.log_text.pack(fill="x", padx=6, pady=(0, 4))
+        _make_readonly(self.log_text)
+        self.log_text.tag_config("success", foreground=C["green"])
+        self.log_text.tag_config("warning", foreground=C["m_surname"])
+        self.log_text.tag_config("error", foreground=C["accent"])
+        self.log_text.tag_config("info", foreground=C["blue"])
+
+        # -- Прогресс --
+        self.progress = ctk.CTkProgressBar(left, progress_color=C["accent"],
+                                            fg_color=C["border"], height=6)
+        self.progress.pack(fill="x", padx=6, pady=(0, 2))
+        self.progress.set(0)
+        self.progress_label = ctk.CTkLabel(left, text="", font=ctk.CTkFont(size=9),
+                                            text_color=C["text3"])
+        self.progress_label.pack(anchor="w", padx=6)
+
+        # ═══ ЦЕНТРАЛЬНАЯ КОЛОНКА — КАРТА ЗАМЕН + ЛИСТЫ ДОКУМЕНТА ═══
+        center = ctk.CTkFrame(body, fg_color=C["bg"], corner_radius=0)
+        center.grid(row=0, column=1, sticky="nsew", padx=2)
+
+        # -- Заголовок предпросмотра --
+        preview_header = ctk.CTkFrame(center, fg_color=C["surface"], height=36, corner_radius=6)
+        preview_header.pack(fill="x", padx=4, pady=(4, 0))
+        preview_header.pack_propagate(False)
+
+        ctk.CTkLabel(preview_header, text="ПРЕДПРОСМОТР",
+                     font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=C["text"]).pack(side="left", padx=8)
+
+        self.found_label = ctk.CTkLabel(preview_header, text="",
+                                         font=ctk.CTkFont(size=10),
+                                         text_color=C["text2"])
+        self.found_label.pack(side="right", padx=4)
+
+        self.preview_file_var = ctk.StringVar(value="")
+        self.preview_file_combo = ctk.CTkComboBox(
+            preview_header, variable=self.preview_file_var, values=[""],
+            width=200, fg_color=C["input"], border_color=C["border"],
+            button_color=C["blue"], dropdown_fg_color=C["surface"],
+            dropdown_hover_color=C["card"], text_color=C["text"],
+            font=ctk.CTkFont(size=10),
+            command=self._on_preview_file_changed)
+        self.preview_file_combo.pack(side="right", padx=4)
+
+        # -- Карта замен (встроенная, сворачиваемая) --
+        self._map_expanded = True
+        map_header = ctk.CTkFrame(center, fg_color=C["card"], height=28, corner_radius=4)
+        map_header.pack(fill="x", padx=4, pady=(4, 0))
+        map_header.pack_propagate(False)
+
+        self.map_toggle_btn = ctk.CTkButton(
+            map_header, text="▾ КАРТА ЗАМЕН (0)", width=200, height=22,
+            fg_color="transparent", hover_color=C["surface"],
+            text_color=C["text2"], anchor="w",
+            font=ctk.CTkFont(size=10, weight="bold"),
+            command=self._toggle_map)
+        self.map_toggle_btn.pack(side="left", padx=4)
+
+        self.map_frame = ctk.CTkFrame(center, fg_color=C["surface"], corner_radius=4)
+        self.map_frame.pack(fill="x", padx=4, pady=(2, 0))
+
+        self.map_text = ctk.CTkTextbox(self.map_frame, height=100, corner_radius=4,
+                                        fg_color=C["input"], text_color=C["text"],
+                                        font=ctk.CTkFont(family="Consolas", size=10))
+        self.map_text.pack(fill="x", padx=4, pady=4)
+        _make_readonly(self.map_text)
+        self.map_text.tag_config("t_org", foreground=C["m_org"])
+        self.map_text.tag_config("t_surname", foreground=C["m_surname"])
+        self.map_text.tag_config("t_city", foreground=C["m_city"])
+        self.map_text.tag_config("t_req", foreground=C["m_req"])
+        self.map_text.tag_config("t_contact", foreground=C["m_contact"])
+        self.map_text.tag_config("t_doc", foreground=C["m_doc"])
+        self.map_text.tag_config("t_address", foreground=C["m_address"])
+        self.map_text.tag_config("arrow", foreground=C["text3"])
+        self.map_text.tag_config("repl", foreground=C["green"])
+        self.map_text.tag_config("src_auto", foreground=C["blue"])
+        self.map_text.tag_config("src_manual", foreground=C["m_surname"])
+
+        # -- Навигация по страницам --
+        page_nav = ctk.CTkFrame(center, fg_color="transparent", height=28)
+        page_nav.pack(fill="x", padx=4, pady=(4, 0))
+        page_nav.pack_propagate(False)
+
+        self.btn_prev_page = ctk.CTkButton(
+            page_nav, text="← Пред.", width=70, height=22,
+            fg_color=C["gray"], hover_color=C["gray_h"],
+            font=ctk.CTkFont(size=10), command=self._prev_page)
+        self.btn_prev_page.pack(side="left")
+
+        self.page_label = ctk.CTkLabel(page_nav, text="",
+                                        font=ctk.CTkFont(size=10), text_color=C["text2"])
+        self.page_label.pack(side="left", padx=8)
+
+        self.btn_next_page = ctk.CTkButton(
+            page_nav, text="След. →", width=70, height=22,
+            fg_color=C["gray"], hover_color=C["gray_h"],
+            font=ctk.CTkFont(size=10), command=self._next_page)
+        self.btn_next_page.pack(side="left")
+
+        self._current_page = 0
+        self._total_pages = 0
+
+        # -- Превью документа: все страницы в скролле как "листы" --
+        self.preview_text = ctk.CTkTextbox(
+            center, corner_radius=4,
+            fg_color="#d0d0d0", text_color="#1a1a1a",
+            font=ctk.CTkFont(size=12),
+            wrap="word")
+        self.preview_text.pack(fill="both", expand=True, padx=4, pady=(4, 4))
+
+        # Теги
+        for etype, color in MARKER_COLORS.items():
+            self.preview_text.tag_config(f"m_{etype}", foreground="#000000", background=color)
+        self.preview_text.tag_config("page_header", foreground="#888888",
+                                     font=ctk.CTkFont(size=9))
+        self.preview_text.tag_config("page_bg", background="#ffffff")
+        self.preview_text.tag_config("page_gap", background="#d0d0d0",
+                                     font=ctk.CTkFont(size=6))
+
+        # Привязка выделения текста
+        self.preview_text.bind("<<Selection>>", self._on_text_selected)
+        self.preview_text.bind("<ButtonRelease-1>", self._on_text_selected)
+        _make_readonly(self.preview_text)
+
+        # ═══ ПРАВАЯ КОЛОНКА — ВЫДЕЛЕННОЕ + ПРАВИЛА ЗАМЕНЫ ═══
+        right = ctk.CTkScrollableFrame(body, width=270, fg_color=C["bg"], corner_radius=0)
+        right.grid(row=0, column=2, sticky="nsew")
+
+        # -- Выделенное (ручное добавление) --
+        self._section(right, "ВЫДЕЛЕННОЕ")
+        sel_frame = ctk.CTkFrame(right, fg_color=C["surface"], corner_radius=6)
+        sel_frame.pack(fill="x", padx=6, pady=(0, 4))
+
+        self.sel_text_label = ctk.CTkLabel(
+            sel_frame, text="Выделите текст в превью",
+            font=ctk.CTkFont(size=10), text_color=C["text3"],
+            wraplength=250, justify="left")
+        self.sel_text_label.pack(padx=6, pady=(4, 2), anchor="w")
+
+        sel_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
+        sel_row.pack(fill="x", padx=6, pady=(2, 2))
+
+        self.sel_type_var = ctk.StringVar(value="Организация")
+        ctk.CTkComboBox(sel_row, variable=self.sel_type_var,
+                        values=list(FIELD_TYPES.keys()), width=120,
+                        fg_color=C["input"], border_color=C["border"],
+                        button_color=C["blue"], dropdown_fg_color=C["surface"],
+                        text_color=C["text"], font=ctk.CTkFont(size=10)
+                        ).pack(side="left", padx=(0, 4))
+
+        ctk.CTkButton(sel_row, text="Добавить", width=70, height=24,
+                      fg_color=C["blue"], hover_color=C["blue_h"],
+                      font=ctk.CTkFont(size=10),
+                      command=self._add_selected_text).pack(side="left")
+
+        # -- Занятые замены (контекст маппинга) --
+        self.sel_used_label = ctk.CTkLabel(
+            sel_frame, text="", font=ctk.CTkFont(size=9),
+            text_color=C["text3"], wraplength=250, justify="left")
+        self.sel_used_label.pack(padx=6, pady=(0, 4), anchor="w")
 
         # -- Правила замены --
-        self._section(left, "ПРАВИЛА ЗАМЕНЫ")
-        self.fields_container = ctk.CTkFrame(left, fg_color="transparent")
+        self._section(right, "ПРАВИЛА ЗАМЕНЫ")
+        self.fields_container = ctk.CTkFrame(right, fg_color="transparent")
         self.fields_container.pack(fill="x", padx=6, pady=(0, 2))
 
-        add_btns = ctk.CTkFrame(left, fg_color="transparent")
+        add_btns = ctk.CTkFrame(right, fg_color="transparent")
         add_btns.pack(fill="x", padx=6, pady=(0, 4))
 
         btn_cfg = [
@@ -434,231 +663,183 @@ class App(ctk.CTk):
             ("+ Своё", "Своё поле", C["gray"]),
         ]
         for text, ft, color in btn_cfg:
-            ctk.CTkButton(add_btns, text=text, width=58, height=24,
+            ctk.CTkButton(add_btns, text=text, width=50, height=22,
                           fg_color=color, hover_color=C["gray_h"],
                           text_color="#000000" if color in (C["m_surname"], C["m_city"]) else C["text"],
-                          font=ctk.CTkFont(size=10),
+                          font=ctk.CTkFont(size=9),
                           command=lambda n=ft: self._add_field_row(n)
                           ).pack(side="left", padx=1)
 
-        # -- Выделенное (ручное добавление) --
-        self._section(left, "ВЫДЕЛЕННОЕ")
-        sel_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
-        sel_frame.pack(fill="x", padx=6, pady=(0, 4))
-
-        self.sel_text_label = ctk.CTkLabel(
-            sel_frame, text="Выделите текст в предпросмотре\nи нажмите «Добавить»",
-            font=ctk.CTkFont(size=11), text_color=C["text3"],
-            wraplength=280, justify="left")
-        self.sel_text_label.pack(padx=8, pady=(6, 2), anchor="w")
-
-        sel_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
-        sel_row.pack(fill="x", padx=8, pady=(2, 2))
-
-        self.sel_type_var = ctk.StringVar(value="Организация")
-        ctk.CTkComboBox(sel_row, variable=self.sel_type_var,
-                        values=list(FIELD_TYPES.keys()), width=130,
-                        fg_color=C["input"], border_color=C["border"],
-                        button_color=C["blue"], dropdown_fg_color=C["surface"],
-                        text_color=C["text"], font=ctk.CTkFont(size=11)
-                        ).pack(side="left", padx=(0, 4))
-
-        ctk.CTkButton(sel_row, text="Добавить", width=80, height=26,
-                      fg_color=C["blue"], hover_color=C["blue_h"],
-                      font=ctk.CTkFont(size=11),
-                      command=self._add_selected_text).pack(side="left")
-
-        # -- PDF --
-        self._section(left, "PDF")
-        pdf_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
-        pdf_frame.pack(fill="x", padx=6, pady=(0, 4))
-        pdf_inner = ctk.CTkFrame(pdf_frame, fg_color="transparent")
-        pdf_inner.pack(fill="x", padx=8, pady=6)
-
-        self.pdf_mode = ctk.StringVar(value="text")
-        ctk.CTkRadioButton(pdf_inner, text="Текст", variable=self.pdf_mode, value="text",
-                           fg_color=C["accent"], font=ctk.CTkFont(size=11)).pack(side="left")
-        ctk.CTkRadioButton(pdf_inner, text="Штамп", variable=self.pdf_mode, value="stamp",
-                           fg_color=C["accent"], font=ctk.CTkFont(size=11)).pack(side="left", padx=8)
-
-        self.stamp_var = ctk.StringVar(value="чёрная плашка")
-        ctk.CTkComboBox(pdf_inner, variable=self.stamp_var,
-                        values=["чёрная плашка", "ромашка", "замок", "конфиденциально"],
-                        width=130, fg_color=C["input"], border_color=C["border"],
-                        button_color=C["gray"], dropdown_fg_color=C["surface"],
-                        text_color=C["text"], font=ctk.CTkFont(size=10)).pack(side="left")
-
-        ocr_row = ctk.CTkFrame(pdf_frame, fg_color="transparent")
-        ocr_row.pack(fill="x", padx=8, pady=(0, 6))
-        self.ocr_enabled = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(ocr_row, text="OCR", variable=self.ocr_enabled,
-                        fg_color=C["blue"], font=ctk.CTkFont(size=11)).pack(side="left")
-
-        # -- Результат --
-        self._section(left, "РЕЗУЛЬТАТ")
-        out_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
-        out_frame.pack(fill="x", padx=6, pady=(0, 4))
-        out_inner = ctk.CTkFrame(out_frame, fg_color="transparent")
-        out_inner.pack(fill="x", padx=6, pady=6)
-        self.output_var = ctk.StringVar(value=self._saved_output or "./cleaned")
-        ctk.CTkEntry(out_inner, textvariable=self.output_var,
-                     fg_color=C["input"], border_color=C["border"],
-                     text_color=C["text"], font=ctk.CTkFont(size=11)).pack(side="left", fill="x", expand=True, padx=(0, 4))
-        ctk.CTkButton(out_inner, text="...", width=30, height=26,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
-                      command=self._browse_output).pack(side="right")
-
-        # -- Лог --
-        self._section(left, "ЛОГ")
-        self.log_text = ctk.CTkTextbox(left, height=80, corner_radius=4,
-                                        fg_color=C["input"], text_color=C["text"],
-                                        font=ctk.CTkFont(family="Consolas", size=10))
-        self.log_text.pack(fill="x", padx=6, pady=(0, 4))
-        self.log_text.configure(state="disabled")
-        self.log_text.tag_config("success", foreground=C["green"])
-        self.log_text.tag_config("warning", foreground=C["m_surname"])
-        self.log_text.tag_config("error", foreground=C["accent"])
-        self.log_text.tag_config("info", foreground=C["blue"])
-
-        # -- Прогресс --
-        self.progress = ctk.CTkProgressBar(left, progress_color=C["accent"],
-                                            fg_color=C["border"], height=8)
-        self.progress.pack(fill="x", padx=6, pady=(0, 2))
-        self.progress.set(0)
-        self.progress_label = ctk.CTkLabel(left, text="", font=ctk.CTkFont(size=10),
-                                            text_color=C["text3"])
-        self.progress_label.pack(anchor="w", padx=8)
-
-        # ═══ ПРАВАЯ ПАНЕЛЬ — ПРЕДПРОСМОТР ═══
-        right = ctk.CTkFrame(body, fg_color=C["surface"], corner_radius=0)
-        right.grid(row=0, column=1, sticky="nsew", padx=(2, 0))
-
-        # Заголовок
-        preview_header = ctk.CTkFrame(right, fg_color="transparent", height=36)
-        preview_header.pack(fill="x", padx=8, pady=(6, 0))
-        preview_header.pack_propagate(False)
-
-        ctk.CTkLabel(preview_header, text="ПРЕДПРОСМОТР",
-                     font=ctk.CTkFont(size=13, weight="bold"),
-                     text_color=C["text"]).pack(side="left")
-
-        self.found_label = ctk.CTkLabel(preview_header, text="",
-                                         font=ctk.CTkFont(size=11),
-                                         text_color=C["text2"])
-        self.found_label.pack(side="right", padx=4)
-
-        # Выбор файла
-        self.preview_file_var = ctk.StringVar(value="")
-        self.preview_file_combo = ctk.CTkComboBox(
-            preview_header, variable=self.preview_file_var, values=[""],
-            width=250, fg_color=C["input"], border_color=C["border"],
-            button_color=C["blue"], dropdown_fg_color=C["surface"],
-            dropdown_hover_color=C["card"], text_color=C["text"],
-            font=ctk.CTkFont(size=11),
-            command=self._on_preview_file_changed)
-        self.preview_file_combo.pack(side="right", padx=4)
-
-        # Пагинация
-        page_nav = ctk.CTkFrame(right, fg_color="transparent", height=30)
-        page_nav.pack(fill="x", padx=8, pady=(2, 0))
-
-        self.btn_prev_page = ctk.CTkButton(
-            page_nav, text="← Пред.", width=80, height=26,
-            fg_color=C["gray"], hover_color=C["gray_h"],
-            font=ctk.CTkFont(size=11), command=self._prev_page)
-        self.btn_prev_page.pack(side="left")
-
-        self.page_label = ctk.CTkLabel(page_nav, text="",
-                                        font=ctk.CTkFont(size=11), text_color=C["text2"])
-        self.page_label.pack(side="left", padx=12)
-
-        self.btn_next_page = ctk.CTkButton(
-            page_nav, text="След. →", width=80, height=26,
-            fg_color=C["gray"], hover_color=C["gray_h"],
-            font=ctk.CTkFont(size=11), command=self._next_page)
-        self.btn_next_page.pack(side="left")
-
-        self._current_page = 0
-        self._total_pages = 0
-
-        # Текст документа — белый фон, чёрный текст
-        self.preview_text = ctk.CTkTextbox(
-            right, corner_radius=4,
-            fg_color="#ffffff", text_color="#1a1a1a",
-            font=ctk.CTkFont(size=12),
-            wrap="word")
-        self.preview_text.pack(fill="both", expand=True, padx=8, pady=(4, 8))
-
-        # Теги маркеров — яркие на белом фоне
-        for etype, color in MARKER_COLORS.items():
-            self.preview_text.tag_config(f"m_{etype}", foreground="#000000", background=color)
-        self.preview_text.tag_config("page_sep", foreground="#999999")
-
-        # Привязка выделения текста
-        self.preview_text.bind("<<Selection>>", self._on_text_selected)
-        self.preview_text.bind("<ButtonRelease-1>", self._on_text_selected)
-
-        # ═══ НИЖНЯЯ ПАНЕЛЬ — КНОПКИ ═══
-        bottom = ctk.CTkFrame(self, fg_color=C["surface"], height=80, corner_radius=0)
+        # ═══ НИЖНЯЯ ПАНЕЛЬ — КНОПКИ ДЕЙСТВИЙ ═══
+        bottom = ctk.CTkFrame(self, fg_color=C["surface"], height=70, corner_radius=0)
         bottom.pack(fill="x")
         bottom.pack_propagate(False)
 
         btn_row = ctk.CTkFrame(bottom, fg_color="transparent")
-        btn_row.pack(pady=8)
+        btn_row.pack(pady=6)
 
-        # Главные кнопки — одинакового размера
-        btn_w, btn_h = 160, 38
+        btn_w, btn_h = 150, 34
         self.btn_detect = ctk.CTkButton(
             btn_row, text="АВТОПОИСК", width=btn_w, height=btn_h,
             fg_color=C["blue"], hover_color=C["blue_h"],
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self._auto_detect_start)
-        self.btn_detect.pack(side="left", padx=6)
+        self.btn_detect.pack(side="left", padx=4)
 
         self.btn_process = ctk.CTkButton(
             btn_row, text="ОБРАБОТАТЬ", width=btn_w, height=btn_h,
             fg_color=C["accent"], hover_color=C["accent_h"],
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self._start_processing)
-        self.btn_process.pack(side="left", padx=6)
+        self.btn_process.pack(side="left", padx=4)
 
         self.btn_deanon = ctk.CTkButton(
             btn_row, text="ДЕАНОНИМИЗАЦИЯ", width=btn_w, height=btn_h,
             fg_color=C["green"], hover_color=C["green_h"],
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             command=self._deanon_panel)
-        self.btn_deanon.pack(side="left", padx=6)
+        self.btn_deanon.pack(side="left", padx=4)
 
-        # Второстепенные
-        btn_row2 = ctk.CTkFrame(bottom, fg_color="transparent")
-        btn_row2.pack()
-
-        ctk.CTkButton(btn_row2, text="История замен", width=110, height=26,
+        ctk.CTkButton(btn_row, text="История", width=80, height=btn_h,
                       fg_color=C["gray"], hover_color=C["gray_h"],
-                      font=ctk.CTkFont(size=11),
+                      font=ctk.CTkFont(size=10),
                       command=self._show_history).pack(side="left", padx=4)
-        ctk.CTkButton(btn_row2, text="Карта замен", width=100, height=26,
+        ctk.CTkButton(btn_row, text="Экспорт карты", width=100, height=btn_h,
                       fg_color=C["gray"], hover_color=C["gray_h"],
-                      font=ctk.CTkFont(size=11),
+                      font=ctk.CTkFont(size=10),
                       command=self._show_replacement_map).pack(side="left", padx=4)
         self.btn_cancel = ctk.CTkButton(
-            btn_row2, text="Отмена", width=80, height=26,
+            btn_row, text="Отмена", width=70, height=btn_h,
             fg_color=C["gray"], hover_color=C["accent"],
-            font=ctk.CTkFont(size=11), state="disabled",
+            font=ctk.CTkFont(size=10), state="disabled",
             command=self._cancel)
         self.btn_cancel.pack(side="left", padx=4)
 
         # ═══ СТАТУС-БАР ═══
-        status = ctk.CTkFrame(self, fg_color=C["card"], height=24, corner_radius=0)
+        status = ctk.CTkFrame(self, fg_color=C["card"], height=22, corner_radius=0)
         status.pack(fill="x")
         status.pack_propagate(False)
         self.status_var = ctk.StringVar(value="Готов к работе")
         ctk.CTkLabel(status, textvariable=self.status_var,
-                     font=ctk.CTkFont(size=10), text_color=C["text2"]).pack(side="left", padx=8)
+                     font=ctk.CTkFont(size=9), text_color=C["text2"]).pack(side="left", padx=8)
 
     def _section(self, parent, text):
-        ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=11, weight="bold"),
-                     text_color=C["text2"], anchor="w").pack(fill="x", padx=8, pady=(8, 2))
+        ctk.CTkLabel(parent, text=text, font=ctk.CTkFont(size=10, weight="bold"),
+                     text_color=C["text2"], anchor="w").pack(fill="x", padx=6, pady=(6, 2))
+
+    def _toggle_map(self):
+        """Сворачивает/разворачивает карту замен."""
+        if self._map_expanded:
+            self.map_frame.pack_forget()
+            self._map_expanded = False
+            lbl = self.map_toggle_btn.cget("text").replace("▾", "▸")
+            self.map_toggle_btn.configure(text=lbl)
+        else:
+            self.map_frame.pack(fill="x", padx=4, pady=(2, 0),
+                                after=self.map_toggle_btn.master)
+            self._map_expanded = True
+            lbl = self.map_toggle_btn.cget("text").replace("▸", "▾")
+            self.map_toggle_btn.configure(text=lbl)
+
+    def _update_map_panel(self):
+        """Обновляет встроенную карту замен из текущих авто-результатов."""
+        self.map_text.delete("1.0", "end")
+
+        type_tag = {
+            "organization": "t_org", "surname": "t_surname", "city": "t_city",
+            "inn": "t_req", "ogrn": "t_req", "kpp": "t_req", "bik": "t_req",
+            "account": "t_req", "phone": "t_contact", "email": "t_contact",
+            "url": "t_contact", "address": "t_address", "snils": "t_doc",
+            "passport": "t_doc",
+        }
+        type_label = {
+            "organization": "Орг", "surname": "ФИО", "city": "Город",
+            "inn": "ИНН", "ogrn": "ОГРН", "kpp": "КПП", "bik": "БИК",
+            "account": "Счёт", "phone": "Тел", "email": "Email",
+            "url": "URL", "address": "Адрес", "snils": "СНИЛС",
+            "passport": "Пасп",
+        }
+
+        seen = set()
+        count = 0
+        # Авто-замены
+        for res in self._last_detect_results:
+            for e in res.get("entities", []):
+                key = e.text.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                count += 1
+                tag = type_tag.get(e.entity_type, "t_org")
+                label = type_label.get(e.entity_type, "?")
+                self.map_text.insert("end", f"{label:>5} ", tag)
+                self.map_text.insert("end", f"{e.text[:30]}", tag)
+                self.map_text.insert("end", " → ", "arrow")
+                self.map_text.insert("end", f"{e.replacement}", "repl")
+                self.map_text.insert("end", "  [авто]\n", "src_auto")
+
+        # Ручные правила
+        for row in self.field_rows:
+            if row.is_empty():
+                continue
+            search = row.get_search()
+            replace = row.get_replace()
+            key = search.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            count += 1
+            ft = row.field_type
+            etype = {"Организация": "organization", "Город": "city",
+                     "ФИО подписант": "surname", "ФИО участники": "surname",
+                     "Своё поле": "address"}.get(ft, "organization")
+            tag = type_tag.get(etype, "t_org")
+            label = type_label.get(etype, "?")
+            self.map_text.insert("end", f"{label:>5} ", tag)
+            self.map_text.insert("end", f"{search[:30]}", tag)
+            self.map_text.insert("end", " → ", "arrow")
+            self.map_text.insert("end", f"{replace}", "repl")
+            self.map_text.insert("end", "  [ручн]\n", "src_manual")
+
+        arrow = "▾" if self._map_expanded else "▸"
+        self.map_toggle_btn.configure(text=f"{arrow} КАРТА ЗАМЕН ({count})")
+
+    def _update_used_replacements(self):
+        """Обновляет список занятых замен в панели ВЫДЕЛЕННОЕ."""
+        ft = self.sel_type_var.get()
+        etype = {"Организация": "organization", "Город": "city",
+                 "ФИО подписант": "surname", "ФИО участники": "surname",
+                 "Своё поле": "address"}.get(ft, "organization")
+
+        used = []
+        for res in self._last_detect_results:
+            for e in res.get("entities", []):
+                if e.entity_type == etype and e.replacement not in used:
+                    used.append(e.replacement)
+        for row in self.field_rows:
+            if not row.is_empty():
+                row_etype = {"Организация": "organization", "Город": "city",
+                             "ФИО подписант": "surname", "ФИО участники": "surname",
+                             "Своё поле": "address"}.get(row.field_type, "organization")
+                if row_etype == etype and row.get_replace() not in used:
+                    used.append(row.get_replace())
+
+        pool = ENGLISH_OPTIONS.get(ft, [])
+        total = len(pool)
+        n_used = len(used)
+
+        if used:
+            used_str = ", ".join(used[:5])
+            if len(used) > 5:
+                used_str += f" ...+{len(used)-5}"
+            next_free = next((x for x in pool if x not in used), None)
+            lines = [f"Занято: {n_used}/{total}"]
+            lines.append(f"Исп.: {used_str}")
+            if next_free:
+                lines.append(f"След. свободное: {next_free}")
+            self.sel_used_label.configure(text="\n".join(lines))
+        else:
+            self.sel_used_label.configure(text="")
 
     # ── Field rows ──
 
@@ -711,11 +892,9 @@ class App(ctk.CTk):
             self._auto_detect_start()
 
     def _refresh_file_list(self):
-        self.file_list.configure(state="normal")
         self.file_list.delete("1.0", "end")
         for f in self.files:
             self.file_list.insert("end", Path(f).name + "\n")
-        self.file_list.configure(state="disabled")
 
     def _clear_files(self):
         self.files.clear()
@@ -739,21 +918,20 @@ class App(ctk.CTk):
     # ── Logging ──
 
     def _log(self, msg, tag="info"):
-        self.log_text.configure(state="normal")
         self.log_text.insert("end", msg + "\n", tag)
         self.log_text.see("end")
-        self.log_text.configure(state="disabled")
         logger.info(msg)
 
     # ── Preview ──
 
     def _clear_preview(self):
-        self.preview_text.configure(state="normal")
         self.preview_text.delete("1.0", "end")
-        self.preview_text.configure(state="disabled")
         self.found_label.configure(text="")
         self.preview_file_combo.configure(values=[""])
         self.preview_file_var.set("")
+        self.map_text.delete("1.0", "end")
+        self.map_toggle_btn.configure(text="▾ КАРТА ЗАМЕН (0)")
+        self.page_label.configure(text="")
 
     def _show_preview(self, all_results):
         """Показывает текст первого файла с подсветкой."""
@@ -778,6 +956,10 @@ class App(ctk.CTk):
         self.summary_label.configure(text="  |  ".join(parts))
         self.found_label.configure(text=f"Найдено: {total}")
 
+        # Обновляем карту замен и занятые замены
+        self._update_map_panel()
+        self._update_used_replacements()
+
     def _on_preview_file_changed(self, choice=None):
         fname = self.preview_file_var.get()
         for r in self._last_detect_results:
@@ -786,7 +968,7 @@ class App(ctk.CTk):
                 return
 
     def _render_file_preview(self, result):
-        """Рендерит текст документа с подсветкой маркеров (постранично)."""
+        """Рендерит все страницы документа как отдельные «листы» в одном скролле."""
         pages = result.get("pages", {})
         entities = result.get("entities", [])
         full_text = result.get("text", "")
@@ -795,7 +977,6 @@ class App(ctk.CTk):
         if not pages and full_text:
             pages = {1: full_text}
 
-        # Сохраняем данные для пагинации
         self._preview_pages = pages
         self._preview_entities = entities
         self._page_keys = sorted(pages.keys()) if pages else []
@@ -809,60 +990,85 @@ class App(ctk.CTk):
             self._page_offsets[pk] = offset
             offset += len(pages[pk])
 
-        self._render_current_page()
+        # Запоминаем tk-метки начала каждой страницы для навигации
+        self._page_marks = {}
 
-    def _render_current_page(self):
-        """Рендерит текущую страницу."""
-        self.preview_text.configure(state="normal")
+        self._render_all_pages()
+
+    def _render_all_pages(self):
+        """Рендерит все страницы как визуальные «листы» с разделителями."""
         self.preview_text.delete("1.0", "end")
 
         if not self._page_keys:
             self.preview_text.insert("end", "(нет текста)")
-            self.preview_text.configure(state="disabled")
             self.page_label.configure(text="")
             return
 
-        page_key = self._page_keys[self._current_page]
-        page_text = self._preview_pages[page_key]
-        page_start = self._page_offsets[page_key]
-        page_end = page_start + len(page_text)
+        for i, page_key in enumerate(self._page_keys):
+            page_text = self._preview_pages[page_key]
+            page_start = self._page_offsets[page_key]
+            page_end = page_start + len(page_text)
 
-        page_entities = sorted(
-            [e for e in self._preview_entities if e.start >= page_start and e.end <= page_end],
-            key=lambda e: e.start)
+            # Разделитель между листами
+            if i > 0:
+                self.preview_text.insert("end", "\n\n", "page_gap")
 
-        pos = 0
-        for e in page_entities:
-            local_start = e.start - page_start
-            local_end = e.end - page_start
-            if local_start < pos:
-                continue
-            if local_start > pos:
-                self.preview_text.insert("end", page_text[pos:local_start])
-            tag = f"m_{e.entity_type}"
-            self.preview_text.insert("end", page_text[local_start:local_end], tag)
-            pos = local_end
+            # Заголовок страницы
+            mark_name = f"page_{page_key}"
+            self.preview_text.mark_set(mark_name, "end-1c")
+            self._page_marks[i] = mark_name
+            self.preview_text.insert("end", f"  ─── Страница {page_key} ───\n", "page_header")
 
-        if pos < len(page_text):
-            self.preview_text.insert("end", page_text[pos:])
+            # Текст с подсветкой сущностей
+            page_entities = sorted(
+                [e for e in self._preview_entities
+                 if e.start >= page_start and e.end <= page_end],
+                key=lambda e: e.start)
 
-        self.preview_text.configure(state="disabled")
+            pos = 0
+            for e in page_entities:
+                local_start = e.start - page_start
+                local_end = e.end - page_start
+                if local_start < pos:
+                    continue
+                if local_start > pos:
+                    self.preview_text.insert("end", page_text[pos:local_start], "page_bg")
+                tag = f"m_{e.entity_type}"
+                self.preview_text.insert("end", page_text[local_start:local_end], tag)
+                pos = local_end
+
+            if pos < len(page_text):
+                self.preview_text.insert("end", page_text[pos:], "page_bg")
+
         self.preview_text.see("1.0")
 
-        # Обновляем навигацию
-        self.page_label.configure(text=f"Стр. {self._current_page + 1} / {self._total_pages}")
-        self.btn_prev_page.configure(state="normal" if self._current_page > 0 else "disabled")
-        self.btn_next_page.configure(state="normal" if self._current_page < self._total_pages - 1 else "disabled")
+        # Навигация
+        self.page_label.configure(text=f"Стр. 1 / {self._total_pages}")
+        self.btn_prev_page.configure(state="disabled")
+        self.btn_next_page.configure(
+            state="normal" if self._total_pages > 1 else "disabled")
 
     def _prev_page(self):
         if self._current_page > 0:
             self._current_page -= 1
-            self._render_current_page()
+            self._scroll_to_page()
 
     def _next_page(self):
         if self._current_page < self._total_pages - 1:
             self._current_page += 1
-            self._render_current_page()
+            self._scroll_to_page()
+
+    def _scroll_to_page(self):
+        """Прокручивает превью к указанной странице."""
+        mark = self._page_marks.get(self._current_page)
+        if mark:
+            self.preview_text.see(mark)
+        self.page_label.configure(
+            text=f"Стр. {self._current_page + 1} / {self._total_pages}")
+        self.btn_prev_page.configure(
+            state="normal" if self._current_page > 0 else "disabled")
+        self.btn_next_page.configure(
+            state="normal" if self._current_page < self._total_pages - 1 else "disabled")
 
     def _on_text_selected(self, event=None):
         """Обработка выделения текста в предпросмотре."""
@@ -874,6 +1080,7 @@ class App(ctk.CTk):
                     text=f"«{sel[:60]}{'...' if len(sel) > 60 else ''}»",
                     text_color=C["text"])
                 self._pending_selection = sel
+                self._update_used_replacements()
             else:
                 self._pending_selection = None
         except (tk.TclError, Exception):
@@ -927,9 +1134,11 @@ class App(ctk.CTk):
                 # Перерисовываем превью с новыми маркерами
                 self._render_file_preview(r)
 
-                # Обновляем сводку
+                # Обновляем сводку и карту замен
                 total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
                 self.found_label.configure(text=f"Найдено: {total}")
+                self._update_map_panel()
+                self._update_used_replacements()
                 break
 
     # ── Auto-detect ──
@@ -1233,13 +1442,13 @@ class App(ctk.CTk):
         file_list_text.tag_config("header", foreground=C["blue"])
         file_list_text.tag_config("item", foreground=C["text"])
         file_list_text.tag_config("selected_item", foreground=C["green"])
+        _make_readonly(file_list_text)
 
         selected_fm_id = [None]  # mutable container
 
         def refresh_list(*args):
             q = search_var.get().strip()
             files = SessionDB.search_files(q)
-            file_list_text.configure(state="normal")
             file_list_text.delete("1.0", "end")
             file_list_text.insert("end",
                 f"{'#':>4}  {'Файл':<30} {'Дата':<20} {'Замен':>6}\n", "header")
@@ -1247,7 +1456,6 @@ class App(ctk.CTk):
             for f in files:
                 line = f"#{f['id']:>3}  {f['source_filename']:<30} {f['created_at']:<20} {f['total_replacements']:>6}\n"
                 file_list_text.insert("end", line, "item")
-            file_list_text.configure(state="disabled")
             if files:
                 selected_fm_id[0] = files[0]["id"]
             else:
@@ -1269,10 +1477,8 @@ class App(ctk.CTk):
                 if 0 <= idx < len(files):
                     selected_fm_id[0] = files[idx]["id"]
                     # Подсветка
-                    file_list_text.configure(state="normal")
                     file_list_text.tag_remove("selected_item", "1.0", "end")
                     file_list_text.tag_add("selected_item", f"{line_num}.0", f"{line_num}.end")
-                    file_list_text.configure(state="disabled")
                     # Показать маппинг
                     show_mappings(files[idx]["id"])
             except Exception:
@@ -1291,10 +1497,10 @@ class App(ctk.CTk):
         map_text.tag_config("pseudo", foreground=C["m_org"])
         map_text.tag_config("arrow", foreground=C["text3"])
         map_text.tag_config("orig", foreground=C["green"])
+        _make_readonly(map_text)
 
         def show_mappings(fm_id):
             mappings = SessionDB.get_file_mappings(fm_id)
-            map_text.configure(state="normal")
             map_text.delete("1.0", "end")
             for m in mappings[:20]:
                 map_text.insert("end", m["pseudonym"], "pseudo")
@@ -1302,7 +1508,6 @@ class App(ctk.CTk):
                 map_text.insert("end", m["original"] + "\n", "orig")
             if len(mappings) > 20:
                 map_text.insert("end", f"...ещё {len(mappings) - 20}\n", "arrow")
-            map_text.configure(state="disabled")
 
         # Файл для деанонимизации
         doc_frame = ctk.CTkFrame(win, fg_color=C["surface"], corner_radius=8)
@@ -1385,7 +1590,7 @@ class App(ctk.CTk):
         for s in sessions:
             files_str = s.get("files") or "(нет файлов)"
             text.insert("end", f"#{s['id']:>3}  {s['created_at']:<20}  {s['total_replacements']:>6}  {files_str}\n")
-        text.configure(state="disabled")
+        _make_readonly(text)
 
     # ── Replacement map ──
 
@@ -1418,7 +1623,7 @@ class App(ctk.CTk):
             text.insert("end", orig, "orig")
             text.insert("end", "  →  ", "arrow")
             text.insert("end", repl + "\n", "repl")
-        text.configure(state="disabled")
+        _make_readonly(text)
 
         def export_csv():
             path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])

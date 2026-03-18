@@ -357,6 +357,11 @@ RE_ORG_FULL_QUOTED = re.compile(
     re.IGNORECASE,
 )
 
+# Организация с текстом между орг. формой и кавычками: ООО ТП "Жопка"
+RE_ORG_MIXED_QUOTED = re.compile(
+    rf'(?:{_ORG_ALT})\s+([А-ЯЁA-Z]{{1,10}})\s*{_QUOTE_OPEN}([^»"\u201d\'"]+){_QUOTE_CLOSE}'
+)
+
 # ИП Фамилия И.О.
 RE_IP = re.compile(
     rf'ИП\s+([А-ЯЁ][а-яё]{{2,}}(?:\s+{_INIT}|\s+[А-ЯЁ][а-яё]+\s+{_PATRONYMIC})?)'
@@ -491,7 +496,7 @@ RE_ADDRESS = re.compile(
 # Адрес без "д." — ул. Розы Люксембург, 1
 RE_ADDRESS_SHORT = re.compile(
     r'(?:ул(?:ица)?[-.\s]+|пр(?:оспект)?[-.\s]+|пер(?:еулок)?[-.\s]+|'
-    r'б(?:ульвар)?[-.\s]+|(?:ш(?:оссе)?[-.\s]+)|наб(?:ережная)?[-.\s]+|'
+    r'(?:б-р|бульвар)[-.\s]+|(?:ш(?:оссе)?[-.\s]+)|наб(?:ережная)?[-.\s]+|'
     r'пл(?:ощадь)?[-.\s]+|мкр[-.\s]*н?[-.\s]+|проезд[-.\s]+)'
     r'[А-ЯЁа-яё][А-ЯЁа-яё0-9\s./-]{2,40}?'
     r',\s*\d+[а-яА-Я/]*'
@@ -824,13 +829,35 @@ def detect_full_names(text: str) -> list[DetectedEntity]:
     return entities
 
 
+def _is_likely_surname_with_initials(word: str) -> bool:
+    """Облегчённая проверка фамилии при наличии инициалов.
+
+    Инициалы — сильный сигнал, поэтому не требуем совпадения
+    с SURNAME_ENDINGS и не фильтруем по окончаниям прилагательных.
+    Отсекаем только явные ложные срабатывания.
+    """
+    if len(word) < 3:
+        return False
+    if not word[0].isupper():
+        return False
+    if not all(c.isalpha() for c in word):
+        return False
+    if word in FALSE_POSITIVE_SURNAMES:
+        return False
+    if is_city(word):
+        return False
+    if word in ALL_FIRST_NAMES:
+        return False
+    return True
+
+
 def detect_surname_initials(text: str) -> list[DetectedEntity]:
     """Обнаруживает Фамилия И.О. и И.О. Фамилия."""
     entities = []
 
     for m in RE_SURNAME_INITIALS.finditer(text):
         surname = m.group(1)
-        if not _is_likely_surname(surname):
+        if not _is_likely_surname_with_initials(surname):
             continue
         full = m.group(0)
         entities.append(DetectedEntity(
@@ -842,7 +869,7 @@ def detect_surname_initials(text: str) -> list[DetectedEntity]:
 
     for m in RE_INITIALS_SURNAME.finditer(text):
         surname = m.group(2)
-        if not _is_likely_surname(surname):
+        if not _is_likely_surname_with_initials(surname):
             continue
         full = m.group(0)
         entities.append(DetectedEntity(
@@ -938,6 +965,23 @@ def detect_organizations(text: str) -> list[DetectedEntity]:
                 replacement=_auto_replacement(ENTITY_ORGANIZATION, full),
                 confidence=0.95,
             ))
+
+    # ООО ТП "Жопка" — текст между орг. формой и кавычками
+    for m in RE_ORG_MIXED_QUOTED.finditer(text):
+        full = m.group(0)
+        if is_whitelisted_org(full):
+            continue
+        prefix = m.group(1).strip()
+        quoted_part = m.group(2).strip()
+        name_part = f"{prefix} {quoted_part}"
+        if is_whitelisted_org(name_part):
+            continue
+        entities.append(DetectedEntity(
+            start=m.start(), end=m.end(), text=full,
+            entity_type=ENTITY_ORGANIZATION,
+            replacement=_auto_replacement(ENTITY_ORGANIZATION, full),
+            confidence=0.95,
+        ))
 
     # ИП Фамилия
     for m in RE_IP.finditer(text):
