@@ -964,7 +964,31 @@ class App(ctk.CTk):
 
     def _remove_field_row(self, row):
         if row in self.field_rows:
+            search = row.get_search()
             self.field_rows.remove(row)
+
+            # Убираем entity из авто-результатов (подсветка в превью)
+            if search:
+                search_lower = search.lower()
+                for res in self._last_detect_results:
+                    entities = res.get("entities", [])
+                    res["entities"] = [
+                        e for e in entities
+                        if e.text.lower() != search_lower
+                    ]
+
+                # Перерисовываем превью
+                fname = self.preview_file_var.get()
+                for r in self._last_detect_results:
+                    if Path(r["filepath"]).name == fname:
+                        self._render_file_preview(r)
+                        break
+
+                # Обновляем сводку, карту, счётчик
+                total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
+                self.found_label.configure(text=f"Найдено: {total}" if total else "")
+                self._update_map_panel()
+                self._update_used_replacements()
 
     # ── Hotkeys ──
 
