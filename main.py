@@ -599,11 +599,9 @@ class App(ctk.CTk):
         # Теги
         for etype, color in MARKER_COLORS.items():
             self.preview_text.tag_config(f"m_{etype}", foreground="#000000", background=color)
-        self.preview_text.tag_config("page_header", foreground="#888888",
-                                     font=ctk.CTkFont(size=9))
+        self.preview_text.tag_config("page_header", foreground="#888888")
         self.preview_text.tag_config("page_bg", background="#ffffff")
-        self.preview_text.tag_config("page_gap", background="#d0d0d0",
-                                     font=ctk.CTkFont(size=6))
+        self.preview_text.tag_config("page_gap", background="#d0d0d0")
 
         # Привязка выделения текста
         self.preview_text.bind("<<Selection>>", self._on_text_selected)
