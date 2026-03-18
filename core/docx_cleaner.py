@@ -160,20 +160,31 @@ def _process_paragraph(paragraph, replacement_rules, stats):
     for _, _, _, rtype in filtered:
         stats[rtype] = stats.get(rtype, 0) + 1
 
-    # Строим новый текст
-    new_text = ''
-    pos = 0
-    for start, end, repl, _ in filtered:
-        new_text += full_text[pos:start]
-        new_text += repl
-        pos = end
-    new_text += full_text[pos:]
+    # Строим новый текст по символам с маппингом на run'ы
+    # Каждый символ нового текста привязываем к run'у оригинала
+    new_run_texts = ['' for _ in runs]
 
-    # Перезаписываем runs: весь текст в первый run, остальные очищаем
-    if runs:
-        runs[0].text = new_text
-        for run in runs[1:]:
-            run.text = ''
+    src_pos = 0  # позиция в оригинальном full_text
+    fi = 0       # индекс в filtered
+
+    for src_pos_iter in range(len(full_text)):
+        if fi < len(filtered) and src_pos_iter == filtered[fi][0]:
+            # Начало замены — вставляем текст замены в run первого символа совпадения
+            start, end, repl, _ = filtered[fi]
+            run_idx = char_map[start][0]
+            new_run_texts[run_idx] += repl
+            fi += 1
+        elif fi > 0 and src_pos_iter < filtered[fi - 1][1]:
+            # Внутри заменённого фрагмента — пропускаем
+            continue
+        else:
+            # Обычный символ — оставляем в своём run'е
+            run_idx = char_map[src_pos_iter][0]
+            new_run_texts[run_idx] += full_text[src_pos_iter]
+
+    # Перезаписываем каждый run его новым текстом (форматирование сохраняется)
+    for i, run in enumerate(runs):
+        run.text = new_run_texts[i]
 
     return stats
 

@@ -1,5 +1,5 @@
 """
-Titan Cleaner v4.1 — портативное GUI-приложение.
+Titan Cleaner v4.2 — портативное GUI-приложение.
 Анонимизация и деанонимизация документов (.docx, .pdf, .xlsx).
 Двухпанельный интерфейс: управление слева, предпросмотр текста справа.
 Маппинг хранится в SQLite базе.
@@ -65,7 +65,7 @@ from core.auto_detect import (
     get_type_name, _reset_counters, _replacement_cache,
 )
 
-APP_TITLE = "Titan Cleaner v4.1"
+APP_TITLE = "Titan Cleaner v4.2"
 WINDOW_WIDTH = 1440
 WINDOW_HEIGHT = 860
 
@@ -139,6 +139,7 @@ LEGEND = [
     ("ФИО", C["m_surname"]),
     ("Орг", C["m_org"]),
     ("Город", C["m_city"]),
+    ("Адрес", C["m_address"]),
     ("Рекв", C["m_req"]),
     ("Конт", C["m_contact"]),
     ("Док", C["m_doc"]),
@@ -168,6 +169,12 @@ FIELD_TYPES = {
         "hint_replace": "Employee #{n}",
         "options_func": get_surname_replacement_options,
         "multiline": True,
+    },
+    "Адрес": {
+        "hint_search": "ул. Ленина, д.5",
+        "hint_replace": "123 Baker Street",
+        "options_func": get_generic_replacement_options,
+        "multiline": False,
     },
     "Своё поле": {
         "hint_search": "ИНН 7707083893",
@@ -214,6 +221,10 @@ ENGLISH_OPTIONS = {
         "Employee #{n}", "Staff Member #{n}", "Specialist #{n}",
         "Worker #{n}", "Associate #{n}", "Team Member #{n}",
     ],
+    "Адрес": [
+        "123 Baker Street", "456 Oak Avenue", "789 Elm Road",
+        "10 Downing Street", "[АДРЕС]", "███████",
+    ],
 }
 
 logger = setup_logging()
@@ -242,7 +253,7 @@ class FieldRow:
                      text_color=MARKER_COLORS.get(
                          {"Организация": "organization", "Город": "city",
                           "ФИО подписант": "surname", "ФИО участники": "surname",
-                          "Своё поле": "address"}.get(field_type, "surname"),
+                          "Адрес": "address", "Своё поле": "address"}.get(field_type, "surname"),
                          C["text"])).pack(side="left")
 
         if cfg["multiline"]:
@@ -272,10 +283,16 @@ class FieldRow:
         ctk.CTkLabel(row2, text="→", width=20).pack(side="left")
 
         self.replace_var = ctk.StringVar(value=cfg["hint_replace"])
-        opts = []
+        # Сначала английские (основные), потом русские опции
+        eng = ENGLISH_OPTIONS.get(field_type, [])
+        rus = []
         for cat, items in cfg["options_func"]().items():
-            opts.extend(items)
-        for item in ENGLISH_OPTIONS.get(field_type, []):
+            rus.extend(items)
+        # Собираем: английские первые, затем разделитель, затем русские
+        opts = list(eng)
+        if eng and rus:
+            opts.append("── Русские ──")
+        for item in rus:
             if item not in opts:
                 opts.append(item)
 
@@ -301,6 +318,8 @@ class FieldRow:
     def get_next_free(self, used_replacements: set) -> str | None:
         """Возвращает следующую свободную замену из пула."""
         for opt in self._all_opts:
+            if opt.startswith("──"):
+                continue
             if opt not in used_replacements:
                 return opt
         return None
@@ -405,16 +424,18 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="TITAN CLEANER",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=C["accent"]).pack(side="left", padx=12)
-        ctk.CTkLabel(top, text="v4.1",
+        ctk.CTkLabel(top, text="v4.2",
                      font=ctk.CTkFont(size=11),
                      text_color=C["text3"]).pack(side="left")
 
         # Легенда цветов
+        legend_frame = ctk.CTkFrame(top, fg_color="transparent")
+        legend_frame.pack(side="right", padx=(8, 12))
+        ctk.CTkLabel(legend_frame, text="Маркеры:", font=ctk.CTkFont(size=12, weight="bold"),
+                     text_color=C["text2"]).pack(side="left", padx=(0, 6))
         for name, color in LEGEND:
-            ctk.CTkLabel(top, text=f"  {name}", font=ctk.CTkFont(size=10),
-                         text_color=color).pack(side="right", padx=2)
-        ctk.CTkLabel(top, text="Маркеры:", font=ctk.CTkFont(size=10),
-                     text_color=C["text3"]).pack(side="right", padx=(8, 0))
+            ctk.CTkLabel(legend_frame, text=f"●{name}", font=ctk.CTkFont(size=12, weight="bold"),
+                         text_color=color).pack(side="left", padx=3)
 
         # ═══ ОСНОВНОЕ ТЕЛО: ТРИ КОЛОНКИ ═══
         body = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
@@ -454,6 +475,19 @@ class App(ctk.CTk):
                       font=ctk.CTkFont(size=10),
                       command=self._clear_files).pack(side="right")
 
+        # -- Папка результатов (сразу под файлами) --
+        out_row = ctk.CTkFrame(files_frame, fg_color="transparent")
+        out_row.pack(fill="x", padx=6, pady=(0, 6))
+        ctk.CTkLabel(out_row, text="Сохранять в:", font=ctk.CTkFont(size=10),
+                     text_color=C["text2"]).pack(side="left")
+        self.output_var = ctk.StringVar(value=self._saved_output or "./cleaned")
+        ctk.CTkEntry(out_row, textvariable=self.output_var,
+                     fg_color=C["input"], border_color=C["border"],
+                     text_color=C["text"], font=ctk.CTkFont(size=10)).pack(side="left", fill="x", expand=True, padx=4)
+        ctk.CTkButton(out_row, text="...", width=26, height=24,
+                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      command=self._browse_output).pack(side="right")
+
         # -- Замены (сводка) --
         self._section(left, "СВОДКА")
         self.summary_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
@@ -489,25 +523,11 @@ class App(ctk.CTk):
         ctk.CTkCheckBox(ocr_row, text="OCR", variable=self.ocr_enabled,
                         fg_color=C["blue"], font=ctk.CTkFont(size=10)).pack(side="left")
 
-        # -- Результат --
-        self._section(left, "РЕЗУЛЬТАТ")
-        out_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
-        out_frame.pack(fill="x", padx=6, pady=(0, 4))
-        out_inner = ctk.CTkFrame(out_frame, fg_color="transparent")
-        out_inner.pack(fill="x", padx=6, pady=4)
-        self.output_var = ctk.StringVar(value=self._saved_output or "./cleaned")
-        ctk.CTkEntry(out_inner, textvariable=self.output_var,
-                     fg_color=C["input"], border_color=C["border"],
-                     text_color=C["text"], font=ctk.CTkFont(size=10)).pack(side="left", fill="x", expand=True, padx=(0, 2))
-        ctk.CTkButton(out_inner, text="...", width=26, height=24,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
-                      command=self._browse_output).pack(side="right")
-
         # -- Лог --
         self._section(left, "ЛОГ")
         self.log_text = ctk.CTkTextbox(left, height=100, corner_radius=4,
                                         fg_color=C["input"], text_color=C["text"],
-                                        font=ctk.CTkFont(family="Consolas", size=9))
+                                        font=ctk.CTkFont(family="Consolas", size=11))
         self.log_text.pack(fill="x", padx=6, pady=(0, 4))
         _make_readonly(self.log_text)
         self.log_text.tag_config("success", foreground=C["green"])
@@ -515,39 +535,36 @@ class App(ctk.CTk):
         self.log_text.tag_config("error", foreground=C["accent"])
         self.log_text.tag_config("info", foreground=C["blue"])
 
-        # -- Карта замен (встроенная, сворачиваемая) --
+        # -- Карта замен (аккордеон по группам) --
         self._map_expanded = True
-        map_header = ctk.CTkFrame(left, fg_color=C["card"], height=24, corner_radius=4)
+        map_header = ctk.CTkFrame(left, fg_color=C["card"], height=26, corner_radius=4)
         map_header.pack(fill="x", padx=6, pady=(6, 0))
         map_header.pack_propagate(False)
 
         self.map_toggle_btn = ctk.CTkButton(
-            map_header, text="▾ КАРТА ЗАМЕН (0)", width=180, height=20,
+            map_header, text="▾ КАРТА ЗАМЕН (0)", width=200, height=22,
             fg_color="transparent", hover_color=C["surface"],
             text_color=C["text2"], anchor="w",
-            font=ctk.CTkFont(size=9, weight="bold"),
+            font=ctk.CTkFont(size=11, weight="bold"),
             command=self._toggle_map)
         self.map_toggle_btn.pack(side="left", padx=4)
 
         self.map_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=4)
         self.map_frame.pack(fill="x", padx=6, pady=(2, 0))
 
-        self.map_text = ctk.CTkTextbox(self.map_frame, height=120, corner_radius=4,
-                                        fg_color=C["input"], text_color=C["text"],
-                                        font=ctk.CTkFont(family="Consolas", size=9))
-        self.map_text.pack(fill="x", padx=4, pady=4)
-        _make_readonly(self.map_text)
-        self.map_text.tag_config("t_org", foreground=C["m_org"])
-        self.map_text.tag_config("t_surname", foreground=C["m_surname"])
-        self.map_text.tag_config("t_city", foreground=C["m_city"])
-        self.map_text.tag_config("t_req", foreground=C["m_req"])
-        self.map_text.tag_config("t_contact", foreground=C["m_contact"])
-        self.map_text.tag_config("t_doc", foreground=C["m_doc"])
-        self.map_text.tag_config("t_address", foreground=C["m_address"])
-        self.map_text.tag_config("arrow", foreground=C["text3"])
-        self.map_text.tag_config("repl", foreground=C["green"])
-        self.map_text.tag_config("src_auto", foreground=C["blue"])
-        self.map_text.tag_config("src_manual", foreground=C["m_surname"])
+        # Контейнер для аккордеон-групп
+        self._map_groups_container = ctk.CTkFrame(self.map_frame, fg_color="transparent")
+        self._map_groups_container.pack(fill="x", padx=2, pady=2)
+        self._map_group_widgets = {}   # group_key -> {header, body, expanded, btn}
+        self._map_group_order = [      # порядок и конфиг групп
+            ("organization", "Организации", C["m_org"]),
+            ("surname",      "ФИО",         C["m_surname"]),
+            ("city",         "Города",      C["m_city"]),
+            ("address",      "Адреса",      C["m_address"]),
+            ("req",          "Реквизиты",   C["m_req"]),
+            ("contact",      "Контакты",    C["m_contact"]),
+            ("doc",          "Документы",    C["m_doc"]),
+        ]
 
         # -- Прогресс --
         self.progress = ctk.CTkProgressBar(left, progress_color=C["accent"],
@@ -677,6 +694,7 @@ class App(ctk.CTk):
         btn_cfg = [
             ("+ Орг", "Организация", C["m_org"]),
             ("+ Город", "Город", C["m_city"]),
+            ("+ Адрес", "Адрес", C["m_address"]),
             ("+ ФИО подп.", "ФИО подписант", C["m_surname"]),
             ("+ ФИО уч.", "ФИО участники", C["m_surname"]),
             ("+ Своё", "Своё поле", C["gray"]),
@@ -684,8 +702,8 @@ class App(ctk.CTk):
         for text, ft, color in btn_cfg:
             ctk.CTkButton(add_btns, text=text, width=50, height=22,
                           fg_color=color, hover_color=C["gray_h"],
-                          text_color="#000000" if color in (C["m_surname"], C["m_city"]) else C["text"],
-                          font=ctk.CTkFont(size=9),
+                          text_color="#000000" if color in (C["m_surname"], C["m_city"], C["m_address"]) else C["text"],
+                          font=ctk.CTkFont(size=10),
                           command=lambda n=ft: self._add_field_row(n)
                           ).pack(side="left", padx=1)
 
@@ -761,15 +779,16 @@ class App(ctk.CTk):
             self.map_toggle_btn.configure(text=lbl)
 
     def _update_map_panel(self):
-        """Обновляет встроенную карту замен из текущих авто-результатов."""
-        self.map_text.delete("1.0", "end")
-
-        type_tag = {
-            "organization": "t_org", "surname": "t_surname", "city": "t_city",
-            "inn": "t_req", "ogrn": "t_req", "kpp": "t_req", "bik": "t_req",
-            "account": "t_req", "phone": "t_contact", "email": "t_contact",
-            "url": "t_contact", "address": "t_address", "snils": "t_doc",
-            "passport": "t_doc",
+        """Обновляет карту замен с группировкой-аккордеоном."""
+        # Маппинг entity_type -> группа аккордеона
+        type_to_group = {
+            "organization": "organization",
+            "surname": "surname",
+            "city": "city",
+            "address": "address",
+            "inn": "req", "ogrn": "req", "kpp": "req", "bik": "req", "account": "req",
+            "phone": "contact", "email": "contact", "url": "contact",
+            "snils": "doc", "passport": "doc",
         }
         type_label = {
             "organization": "Орг", "surname": "ФИО", "city": "Город",
@@ -779,8 +798,11 @@ class App(ctk.CTk):
             "passport": "Пасп",
         }
 
+        # Собираем данные по группам: group_key -> [(label, src_text, repl_text, source)]
+        groups_data = {}
         seen = set()
         count = 0
+
         # Авто-замены
         for res in self._last_detect_results:
             for e in res.get("entities", []):
@@ -789,20 +811,16 @@ class App(ctk.CTk):
                     continue
                 seen.add(key)
                 count += 1
-                tag = type_tag.get(e.entity_type, "t_org")
+                grp = type_to_group.get(e.entity_type, "organization")
                 label = type_label.get(e.entity_type, "?")
-                self.map_text.insert("end", f"{label:>5} ", tag)
-                self.map_text.insert("end", f"{e.text[:30]}", tag)
-                self.map_text.insert("end", " → ", "arrow")
-                self.map_text.insert("end", f"{e.replacement}", "repl")
-                self.map_text.insert("end", "  [авто]\n", "src_auto")
+                groups_data.setdefault(grp, []).append(
+                    (label, e.text[:35], e.replacement, "авто"))
 
         # Ручные правила
         for row in self.field_rows:
             if row.is_empty():
                 continue
-            search = row.get_search()
-            replace = row.get_replace()
+            search, replace = row.get_search(), row.get_replace()
             key = search.lower()
             if key in seen:
                 continue
@@ -811,32 +829,94 @@ class App(ctk.CTk):
             ft = row.field_type
             etype = {"Организация": "organization", "Город": "city",
                      "ФИО подписант": "surname", "ФИО участники": "surname",
-                     "Своё поле": "address"}.get(ft, "organization")
-            tag = type_tag.get(etype, "t_org")
+                     "Адрес": "address", "Своё поле": "address"}.get(ft, "organization")
+            grp = type_to_group.get(etype, "organization")
             label = type_label.get(etype, "?")
-            self.map_text.insert("end", f"{label:>5} ", tag)
-            self.map_text.insert("end", f"{search[:30]}", tag)
-            self.map_text.insert("end", " → ", "arrow")
-            self.map_text.insert("end", f"{replace}", "repl")
-            self.map_text.insert("end", "  [ручн]\n", "src_manual")
+            groups_data.setdefault(grp, []).append(
+                (label, search[:35], replace, "ручн"))
+
+        # Очищаем старые виджеты
+        for w in self._map_groups_container.winfo_children():
+            w.destroy()
+        self._map_group_widgets.clear()
+
+        # Строим аккордеон-группы
+        for grp_key, grp_name, grp_color in self._map_group_order:
+            items = groups_data.get(grp_key, [])
+            if not items:
+                continue
+
+            # Заголовок группы (кнопка)
+            hdr = ctk.CTkFrame(self._map_groups_container, fg_color=C["card"],
+                               height=24, corner_radius=3)
+            hdr.pack(fill="x", pady=(2, 0))
+            hdr.pack_propagate(False)
+
+            body = ctk.CTkFrame(self._map_groups_container, fg_color=C["input"],
+                                corner_radius=3)
+            body.pack(fill="x", pady=(0, 1))
+
+            gw = {"body": body, "expanded": True}
+            self._map_group_widgets[grp_key] = gw
+
+            btn = ctk.CTkButton(
+                hdr, text=f"▾ {grp_name} ({len(items)})", width=200, height=22,
+                fg_color="transparent", hover_color=C["surface"],
+                text_color=grp_color, anchor="w",
+                font=ctk.CTkFont(size=11, weight="bold"),
+                command=lambda k=grp_key: self._toggle_map_group(k))
+            btn.pack(side="left", padx=4)
+            gw["btn"] = btn
+
+            # Элементы группы
+            for label, src, repl, source in items:
+                row_f = ctk.CTkFrame(body, fg_color="transparent")
+                row_f.pack(fill="x", padx=4, pady=1)
+
+                ctk.CTkLabel(row_f, text=src, font=ctk.CTkFont(family="Consolas", size=11),
+                             text_color=grp_color, anchor="w", width=120).pack(side="left")
+                ctk.CTkLabel(row_f, text="→", font=ctk.CTkFont(size=10),
+                             text_color=C["text3"], width=16).pack(side="left")
+                ctk.CTkLabel(row_f, text=repl, font=ctk.CTkFont(family="Consolas", size=11),
+                             text_color=C["green"], anchor="w").pack(side="left", padx=(2, 0))
+                src_color = C["blue"] if source == "авто" else C["m_surname"]
+                ctk.CTkLabel(row_f, text=f"[{source}]", font=ctk.CTkFont(size=9),
+                             text_color=src_color, width=36).pack(side="right")
 
         arrow = "▾" if self._map_expanded else "▸"
         self.map_toggle_btn.configure(text=f"{arrow} КАРТА ЗАМЕН ({count})")
 
-        # Обновляем галочки занятых замен во всех field rows
+        # Обновляем галочки занятых замен
         for row in self.field_rows:
             row_etype = {"Организация": "organization", "Город": "city",
                          "ФИО подписант": "surname", "ФИО участники": "surname",
-                         "Своё поле": "address"}.get(row.field_type, "organization")
+                         "Адрес": "address", "Своё поле": "address"}.get(row.field_type, "organization")
             used = self._get_used_replacements(row_etype)
             row.update_used_marks(used)
+
+    def _toggle_map_group(self, grp_key):
+        """Сворачивает/разворачивает группу аккордеона карты замен."""
+        gw = self._map_group_widgets.get(grp_key)
+        if not gw:
+            return
+        if gw["expanded"]:
+            gw["body"].pack_forget()
+            gw["expanded"] = False
+            txt = gw["btn"].cget("text").replace("▾", "▸")
+            gw["btn"].configure(text=txt)
+        else:
+            # Вставить body обратно после header
+            gw["body"].pack(fill="x", pady=(0, 1), after=gw["btn"].master)
+            gw["expanded"] = True
+            txt = gw["btn"].cget("text").replace("▸", "▾")
+            gw["btn"].configure(text=txt)
 
     def _update_used_replacements(self):
         """Обновляет список занятых замен в панели ВЫДЕЛЕННОЕ."""
         ft = self.sel_type_var.get()
         etype = {"Организация": "organization", "Город": "city",
                  "ФИО подписант": "surname", "ФИО участники": "surname",
-                 "Своё поле": "address"}.get(ft, "organization")
+                 "Адрес": "address", "Своё поле": "address"}.get(ft, "organization")
 
         used = []
         for res in self._last_detect_results:
@@ -847,7 +927,7 @@ class App(ctk.CTk):
             if not row.is_empty():
                 row_etype = {"Организация": "organization", "Город": "city",
                              "ФИО подписант": "surname", "ФИО участники": "surname",
-                             "Своё поле": "address"}.get(row.field_type, "organization")
+                             "Адрес": "address", "Своё поле": "address"}.get(row.field_type, "organization")
                 if row_etype == etype and row.get_replace() not in used:
                     used.append(row.get_replace())
 
@@ -956,7 +1036,9 @@ class App(ctk.CTk):
         self.found_label.configure(text="")
         self.preview_file_combo.configure(values=[""])
         self.preview_file_var.set("")
-        self.map_text.delete("1.0", "end")
+        for w in self._map_groups_container.winfo_children():
+            w.destroy()
+        self._map_group_widgets.clear()
         self.map_toggle_btn.configure(text="▾ КАРТА ЗАМЕН (0)")
         self.page_label.configure(text="")
 
@@ -1090,7 +1172,9 @@ class App(ctk.CTk):
         """Прокручивает превью к указанной странице."""
         mark = self._page_marks.get(self._current_page)
         if mark:
-            self.preview_text.see(mark)
+            self.preview_text._textbox.see(mark)
+            # Дополнительно прокрутить метку в начало видимой области
+            self.after(50, lambda: self.preview_text._textbox.yview(mark))
         self.page_label.configure(
             text=f"Стр. {self._current_page + 1} / {self._total_pages}")
         self.btn_prev_page.configure(
@@ -1125,7 +1209,7 @@ class App(ctk.CTk):
             if not row.is_empty():
                 row_etype = {"Организация": "organization", "Город": "city",
                              "ФИО подписант": "surname", "ФИО участники": "surname",
-                             "Своё поле": "address"}.get(row.field_type, "organization")
+                             "Адрес": "address", "Своё поле": "address"}.get(row.field_type, "organization")
                 if row_etype == entity_type:
                     used.add(row.get_replace())
         return used
@@ -1139,7 +1223,7 @@ class App(ctk.CTk):
         ft = self.sel_type_var.get()
         etype = {"Организация": "organization", "Город": "city",
                  "ФИО подписант": "surname", "ФИО участники": "surname",
-                 "Своё поле": "address"}.get(ft, "organization")
+                 "Адрес": "address", "Своё поле": "address"}.get(ft, "organization")
 
         row = self._add_field_row(ft)
         row.set_search(sel)
@@ -1158,6 +1242,7 @@ class App(ctk.CTk):
         type_map = {
             "Организация": "organization",
             "Город": "city",
+            "Адрес": "address",
             "ФИО подписант": "surname",
             "ФИО участники": "surname",
             "Своё поле": "address",
@@ -1254,6 +1339,8 @@ class App(ctk.CTk):
                             pats.extend(sp.get_all_patterns_sorted())
                 if pats:
                     rules.append({"patterns": pats, "mapper": mapper, "type": "surnames"})
+            elif ft == "Адрес":
+                rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "address"})
             elif ft == "Своё поле":
                 rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "custom"})
         return rules
