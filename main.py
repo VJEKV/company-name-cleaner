@@ -279,13 +279,31 @@ class FieldRow:
             if item not in opts:
                 opts.append(item)
 
+        self._all_opts = list(dict.fromkeys(opts))
         self.replace_combo = ctk.CTkComboBox(
-            row2, variable=self.replace_var, values=list(dict.fromkeys(opts)),
+            row2, variable=self.replace_var, values=self._all_opts,
             width=200, fg_color=C["input"], border_color=C["border"],
             button_color=C["blue"], button_hover_color=C["blue_h"],
             dropdown_fg_color=C["surface"], dropdown_hover_color=C["card"],
             text_color=C["text"], font=ctk.CTkFont(size=11))
         self.replace_combo.pack(side="left", padx=4, fill="x", expand=True)
+
+    def update_used_marks(self, used_replacements: set):
+        """Обновляет выпадающий список: занятые отмечены ✓."""
+        marked = []
+        for opt in self._all_opts:
+            if opt in used_replacements:
+                marked.append(f"✓ {opt}")
+            else:
+                marked.append(f"  {opt}")
+        self.replace_combo.configure(values=marked)
+
+    def get_next_free(self, used_replacements: set) -> str | None:
+        """Возвращает следующую свободную замену из пула."""
+        for opt in self._all_opts:
+            if opt not in used_replacements:
+                return opt
+        return None
 
     def _delete(self):
         self.frame.destroy()
@@ -299,7 +317,11 @@ class FieldRow:
         return self.search_var.get().strip()
 
     def get_replace(self):
-        return self.replace_var.get().strip()
+        val = self.replace_var.get().strip()
+        # Убираем маркер занятости
+        if val.startswith("✓ "):
+            val = val[2:]
+        return val
 
     def set_search(self, text):
         cfg = FIELD_TYPES.get(self.field_type, FIELD_TYPES["Своё поле"])
@@ -493,16 +515,50 @@ class App(ctk.CTk):
         self.log_text.tag_config("error", foreground=C["accent"])
         self.log_text.tag_config("info", foreground=C["blue"])
 
+        # -- Карта замен (встроенная, сворачиваемая) --
+        self._map_expanded = True
+        map_header = ctk.CTkFrame(left, fg_color=C["card"], height=24, corner_radius=4)
+        map_header.pack(fill="x", padx=6, pady=(6, 0))
+        map_header.pack_propagate(False)
+
+        self.map_toggle_btn = ctk.CTkButton(
+            map_header, text="▾ КАРТА ЗАМЕН (0)", width=180, height=20,
+            fg_color="transparent", hover_color=C["surface"],
+            text_color=C["text2"], anchor="w",
+            font=ctk.CTkFont(size=9, weight="bold"),
+            command=self._toggle_map)
+        self.map_toggle_btn.pack(side="left", padx=4)
+
+        self.map_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=4)
+        self.map_frame.pack(fill="x", padx=6, pady=(2, 0))
+
+        self.map_text = ctk.CTkTextbox(self.map_frame, height=120, corner_radius=4,
+                                        fg_color=C["input"], text_color=C["text"],
+                                        font=ctk.CTkFont(family="Consolas", size=9))
+        self.map_text.pack(fill="x", padx=4, pady=4)
+        _make_readonly(self.map_text)
+        self.map_text.tag_config("t_org", foreground=C["m_org"])
+        self.map_text.tag_config("t_surname", foreground=C["m_surname"])
+        self.map_text.tag_config("t_city", foreground=C["m_city"])
+        self.map_text.tag_config("t_req", foreground=C["m_req"])
+        self.map_text.tag_config("t_contact", foreground=C["m_contact"])
+        self.map_text.tag_config("t_doc", foreground=C["m_doc"])
+        self.map_text.tag_config("t_address", foreground=C["m_address"])
+        self.map_text.tag_config("arrow", foreground=C["text3"])
+        self.map_text.tag_config("repl", foreground=C["green"])
+        self.map_text.tag_config("src_auto", foreground=C["blue"])
+        self.map_text.tag_config("src_manual", foreground=C["m_surname"])
+
         # -- Прогресс --
         self.progress = ctk.CTkProgressBar(left, progress_color=C["accent"],
                                             fg_color=C["border"], height=6)
-        self.progress.pack(fill="x", padx=6, pady=(0, 2))
+        self.progress.pack(fill="x", padx=6, pady=(4, 2))
         self.progress.set(0)
         self.progress_label = ctk.CTkLabel(left, text="", font=ctk.CTkFont(size=9),
                                             text_color=C["text3"])
         self.progress_label.pack(anchor="w", padx=6)
 
-        # ═══ ЦЕНТРАЛЬНАЯ КОЛОНКА — КАРТА ЗАМЕН + ЛИСТЫ ДОКУМЕНТА ═══
+        # ═══ ЦЕНТРАЛЬНАЯ КОЛОНКА — ЛИСТЫ ДОКУМЕНТА ═══
         center = ctk.CTkFrame(body, fg_color=C["bg"], corner_radius=0)
         center.grid(row=0, column=1, sticky="nsew", padx=2)
 
@@ -529,40 +585,6 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=10),
             command=self._on_preview_file_changed)
         self.preview_file_combo.pack(side="right", padx=4)
-
-        # -- Карта замен (встроенная, сворачиваемая) --
-        self._map_expanded = True
-        map_header = ctk.CTkFrame(center, fg_color=C["card"], height=28, corner_radius=4)
-        map_header.pack(fill="x", padx=4, pady=(4, 0))
-        map_header.pack_propagate(False)
-
-        self.map_toggle_btn = ctk.CTkButton(
-            map_header, text="▾ КАРТА ЗАМЕН (0)", width=200, height=22,
-            fg_color="transparent", hover_color=C["surface"],
-            text_color=C["text2"], anchor="w",
-            font=ctk.CTkFont(size=10, weight="bold"),
-            command=self._toggle_map)
-        self.map_toggle_btn.pack(side="left", padx=4)
-
-        self.map_frame = ctk.CTkFrame(center, fg_color=C["surface"], corner_radius=4)
-        self.map_frame.pack(fill="x", padx=4, pady=(2, 0))
-
-        self.map_text = ctk.CTkTextbox(self.map_frame, height=100, corner_radius=4,
-                                        fg_color=C["input"], text_color=C["text"],
-                                        font=ctk.CTkFont(family="Consolas", size=10))
-        self.map_text.pack(fill="x", padx=4, pady=4)
-        _make_readonly(self.map_text)
-        self.map_text.tag_config("t_org", foreground=C["m_org"])
-        self.map_text.tag_config("t_surname", foreground=C["m_surname"])
-        self.map_text.tag_config("t_city", foreground=C["m_city"])
-        self.map_text.tag_config("t_req", foreground=C["m_req"])
-        self.map_text.tag_config("t_contact", foreground=C["m_contact"])
-        self.map_text.tag_config("t_doc", foreground=C["m_doc"])
-        self.map_text.tag_config("t_address", foreground=C["m_address"])
-        self.map_text.tag_config("arrow", foreground=C["text3"])
-        self.map_text.tag_config("repl", foreground=C["green"])
-        self.map_text.tag_config("src_auto", foreground=C["blue"])
-        self.map_text.tag_config("src_manual", foreground=C["m_surname"])
 
         # -- Навигация по страницам --
         page_nav = ctk.CTkFrame(center, fg_color="transparent", height=28)
@@ -591,7 +613,7 @@ class App(ctk.CTk):
         # -- Превью документа: все страницы в скролле как "листы" --
         self.preview_text = ctk.CTkTextbox(
             center, corner_radius=4,
-            fg_color="#d0d0d0", text_color="#1a1a1a",
+            fg_color="#ffffff", text_color="#1a1a1a",
             font=ctk.CTkFont(size=12),
             wrap="word")
         self.preview_text.pack(fill="both", expand=True, padx=4, pady=(4, 4))
@@ -599,9 +621,8 @@ class App(ctk.CTk):
         # Теги
         for etype, color in MARKER_COLORS.items():
             self.preview_text.tag_config(f"m_{etype}", foreground="#000000", background=color)
-        self.preview_text.tag_config("page_header", foreground="#888888")
-        self.preview_text.tag_config("page_bg", background="#ffffff")
-        self.preview_text.tag_config("page_gap", background="#d0d0d0")
+        self.preview_text.tag_config("page_header", foreground="#999999", background="#e8e8e8")
+        self.preview_text.tag_config("page_gap", foreground="#cccccc", background="#cccccc")
 
         # Привязка выделения текста
         self.preview_text.bind("<<Selection>>", self._on_text_selected)
@@ -733,7 +754,7 @@ class App(ctk.CTk):
             lbl = self.map_toggle_btn.cget("text").replace("▾", "▸")
             self.map_toggle_btn.configure(text=lbl)
         else:
-            self.map_frame.pack(fill="x", padx=4, pady=(2, 0),
+            self.map_frame.pack(fill="x", padx=6, pady=(2, 0),
                                 after=self.map_toggle_btn.master)
             self._map_expanded = True
             lbl = self.map_toggle_btn.cget("text").replace("▸", "▾")
@@ -801,6 +822,14 @@ class App(ctk.CTk):
 
         arrow = "▾" if self._map_expanded else "▸"
         self.map_toggle_btn.configure(text=f"{arrow} КАРТА ЗАМЕН ({count})")
+
+        # Обновляем галочки занятых замен во всех field rows
+        for row in self.field_rows:
+            row_etype = {"Организация": "organization", "Город": "city",
+                         "ФИО подписант": "surname", "ФИО участники": "surname",
+                         "Своё поле": "address"}.get(row.field_type, "organization")
+            used = self._get_used_replacements(row_etype)
+            row.update_used_marks(used)
 
     def _update_used_replacements(self):
         """Обновляет список занятых замен в панели ВЫДЕЛЕННОЕ."""
@@ -1009,7 +1038,8 @@ class App(ctk.CTk):
 
             # Разделитель между листами
             if i > 0:
-                self.preview_text.insert("end", "\n\n", "page_gap")
+                self.preview_text.insert("end", "\n")
+                self.preview_text.insert("end", "━" * 60 + "\n", "page_gap")
 
             # Заголовок страницы
             mark_name = f"page_{page_key}"
@@ -1030,13 +1060,13 @@ class App(ctk.CTk):
                 if local_start < pos:
                     continue
                 if local_start > pos:
-                    self.preview_text.insert("end", page_text[pos:local_start], "page_bg")
+                    self.preview_text.insert("end", page_text[pos:local_start])
                 tag = f"m_{e.entity_type}"
                 self.preview_text.insert("end", page_text[local_start:local_end], tag)
                 pos = local_end
 
             if pos < len(page_text):
-                self.preview_text.insert("end", page_text[pos:], "page_bg")
+                self.preview_text.insert("end", page_text[pos:])
 
         self.preview_text.see("1.0")
 
@@ -1084,6 +1114,22 @@ class App(ctk.CTk):
         except (tk.TclError, Exception):
             self._pending_selection = None
 
+    def _get_used_replacements(self, entity_type):
+        """Возвращает set занятых замен для данного типа."""
+        used = set()
+        for res in self._last_detect_results:
+            for e in res.get("entities", []):
+                if e.entity_type == entity_type:
+                    used.add(e.replacement)
+        for row in self.field_rows:
+            if not row.is_empty():
+                row_etype = {"Организация": "organization", "Город": "city",
+                             "ФИО подписант": "surname", "ФИО участники": "surname",
+                             "Своё поле": "address"}.get(row.field_type, "organization")
+                if row_etype == entity_type:
+                    used.add(row.get_replace())
+        return used
+
     def _add_selected_text(self):
         """Добавляет выделенный текст как правило замены и подсвечивает в превью."""
         sel = getattr(self, '_pending_selection', None)
@@ -1091,8 +1137,20 @@ class App(ctk.CTk):
             messagebox.showinfo("Выделение", "Выделите текст в предпросмотре мышкой.")
             return
         ft = self.sel_type_var.get()
+        etype = {"Организация": "organization", "Город": "city",
+                 "ФИО подписант": "surname", "ФИО участники": "surname",
+                 "Своё поле": "address"}.get(ft, "organization")
+
         row = self._add_field_row(ft)
         row.set_search(sel)
+
+        # Автовыбор следующей свободной замены
+        used = self._get_used_replacements(etype)
+        next_free = row.get_next_free(used)
+        if next_free:
+            row.set_replace(next_free)
+        row.update_used_marks(used)
+
         self.sel_text_label.configure(text=f"Добавлено: «{sel[:40]}»", text_color=C["green"])
         self._pending_selection = None
 

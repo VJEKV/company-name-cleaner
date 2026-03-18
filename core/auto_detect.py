@@ -1501,8 +1501,28 @@ def auto_detect_in_file(filepath: str) -> dict:
         }
 
 
+def _has_page_break(paragraph) -> bool:
+    """Проверяет, содержит ли абзац разрыв страницы."""
+    from lxml import etree
+    ns = '{http://schemas.openxmlformats.org/wordprocessingml/2006/main}'
+    # Разрыв в свойствах абзаца (pageBreakBefore)
+    pPr = paragraph._element.find(f'{ns}pPr')
+    if pPr is not None:
+        pb = pPr.find(f'{ns}pageBreakBefore')
+        if pb is not None:
+            val = pb.get(f'{ns}val')
+            if val is None or val not in ('0', 'false'):
+                return True
+    # Разрыв в ранах (<w:br w:type="page"/>)
+    for run in paragraph.runs:
+        for br in run._element.findall(f'{ns}br'):
+            if br.get(f'{ns}type') == 'page':
+                return True
+    return False
+
+
 def _detect_in_docx(filepath: str) -> dict:
-    """Автодетекция в DOCX-файле."""
+    """Автодетекция в DOCX-файле с разбивкой по страницам."""
     from docx import Document
 
     try:
@@ -1517,27 +1537,72 @@ def _detect_in_docx(filepath: str) -> dict:
             "error": str(e),
         }
 
-    # Собираем весь текст
-    paragraphs = []
+    # Собираем абзацы с учётом разрывов страниц
+    page_paragraphs = [[]]  # список списков абзацев по страницам
     for p in doc.paragraphs:
-        paragraphs.append(p.text)
+        if _has_page_break(p) and page_paragraphs[-1]:
+            page_paragraphs.append([])
+        page_paragraphs[-1].append(p.text)
+
+    # Таблицы добавляем к последней странице
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 for p in cell.paragraphs:
-                    paragraphs.append(p.text)
+                    page_paragraphs[-1].append(p.text)
 
-    full_text = '\n'.join(paragraphs)
-    entities = auto_detect_all(full_text)
+    # Если разрывов не было — пытаемся разбить по ~3000 символов (примерно страница)
+    if len(page_paragraphs) == 1:
+        all_paras = page_paragraphs[0]
+        full = '\n'.join(all_paras)
+        if len(full) > 4000:
+            # Разбиваем по ~3000 символов по границам абзацев
+            page_paragraphs = []
+            current = []
+            current_len = 0
+            for para in all_paras:
+                current.append(para)
+                current_len += len(para) + 1
+                if current_len >= 3000:
+                    page_paragraphs.append(current)
+                    current = []
+                    current_len = 0
+            if current:
+                page_paragraphs.append(current)
+
+    # Строим pages dict и полный текст
+    pages = {}
+    all_entities = []
+    full_text_parts = []
+    offset = 0
+
+    for i, paras in enumerate(page_paragraphs):
+        page_text = '\n'.join(paras)
+        page_num = i + 1
+        pages[page_num] = page_text
+
+        page_entities = auto_detect_all(page_text)
+        for e in page_entities:
+            e.start += offset
+            e.end += offset
+        all_entities.extend(page_entities)
+
+        full_text_parts.append(page_text)
+        offset += len(page_text)
+
+    full_text = ''.join(full_text_parts)
+
+    # Дедупликация между страницами
+    all_entities = _deduplicate(all_entities)
 
     by_type = {}
-    for e in entities:
+    for e in all_entities:
         by_type.setdefault(e.entity_type, []).append(e)
 
     return {
         "filepath": filepath,
-        "entities": entities,
-        "pages": {1: full_text},
+        "entities": all_entities,
+        "pages": pages,
         "text": full_text,
         "by_type": by_type,
         "error": None,
