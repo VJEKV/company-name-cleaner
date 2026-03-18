@@ -814,7 +814,7 @@ class App(ctk.CTk):
                 grp = type_to_group.get(e.entity_type, "organization")
                 label = type_label.get(e.entity_type, "?")
                 groups_data.setdefault(grp, []).append(
-                    (label, e.text[:35], e.replacement, "авто"))
+                    (label, e.text, e.replacement, "авто"))
 
         # Ручные правила
         for row in self.field_rows:
@@ -833,7 +833,7 @@ class App(ctk.CTk):
             grp = type_to_group.get(etype, "organization")
             label = type_label.get(etype, "?")
             groups_data.setdefault(grp, []).append(
-                (label, search[:35], replace, "ручн"))
+                (label, search, replace, "ручн"))
 
         # Очищаем старые виджеты
         for w in self._map_groups_container.winfo_children():
@@ -871,17 +871,24 @@ class App(ctk.CTk):
             # Элементы группы
             for label, src, repl, source in items:
                 row_f = ctk.CTkFrame(body, fg_color="transparent")
-                row_f.pack(fill="x", padx=4, pady=1)
+                row_f.pack(fill="x", padx=4, pady=(1, 2))
 
-                ctk.CTkLabel(row_f, text=src, font=ctk.CTkFont(family="Consolas", size=11),
-                             text_color=grp_color, anchor="w", width=120).pack(side="left")
-                ctk.CTkLabel(row_f, text="→", font=ctk.CTkFont(size=10),
-                             text_color=C["text3"], width=16).pack(side="left")
-                ctk.CTkLabel(row_f, text=repl, font=ctk.CTkFont(family="Consolas", size=11),
-                             text_color=C["green"], anchor="w").pack(side="left", padx=(2, 0))
+                # Верхняя строка: исходный текст + [источник]
+                top_row = ctk.CTkFrame(row_f, fg_color="transparent")
+                top_row.pack(fill="x")
                 src_color = C["blue"] if source == "авто" else C["m_surname"]
-                ctk.CTkLabel(row_f, text=f"[{source}]", font=ctk.CTkFont(size=9),
+                ctk.CTkLabel(top_row, text=f"[{source}]", font=ctk.CTkFont(size=9),
                              text_color=src_color, width=36).pack(side="right")
+                ctk.CTkLabel(top_row, text=src, font=ctk.CTkFont(family="Consolas", size=11),
+                             text_color=grp_color, anchor="w", wraplength=220).pack(side="left", fill="x")
+
+                # Нижняя строка: стрелка + замена
+                bot_row = ctk.CTkFrame(row_f, fg_color="transparent")
+                bot_row.pack(fill="x")
+                ctk.CTkLabel(bot_row, text="  → ", font=ctk.CTkFont(size=10),
+                             text_color=C["text3"]).pack(side="left")
+                ctk.CTkLabel(bot_row, text=repl, font=ctk.CTkFont(family="Consolas", size=11),
+                             text_color=C["green"], anchor="w", wraplength=220).pack(side="left", fill="x")
 
         arrow = "▾" if self._map_expanded else "▸"
         self.map_toggle_btn.configure(text=f"{arrow} КАРТА ЗАМЕН ({count})")
