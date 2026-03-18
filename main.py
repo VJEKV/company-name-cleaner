@@ -1,5 +1,5 @@
 """
-Titan Cleaner v4.2 — портативное GUI-приложение.
+Titan Cleaner v4.3 — портативное GUI-приложение.
 Анонимизация и деанонимизация документов (.docx, .pdf, .xlsx).
 Двухпанельный интерфейс: управление слева, предпросмотр текста справа.
 Маппинг хранится в SQLite базе.
@@ -57,7 +57,7 @@ from core.docx_cleaner import clean_docx, preview_docx
 from core.pdf_cleaner import clean_pdf_text_mode, clean_pdf_stamp_mode, preview_pdf
 from core.xlsx_cleaner import clean_xlsx, preview_xlsx, extract_text_xlsx, is_openpyxl_available
 from core.utils import (
-    setup_logging, load_config, save_config, get_assets_dir,
+    setup_logging, load_config, save_config, get_assets_dir, get_app_dir,
     is_valid_file, ensure_output_dir, format_file_size,
 )
 from core.auto_detect import (
@@ -65,7 +65,7 @@ from core.auto_detect import (
     get_type_name, _reset_counters, _replacement_cache,
 )
 
-APP_TITLE = "Titan Cleaner v4.2"
+APP_TITLE = "Titan Cleaner v4.3"
 WINDOW_WIDTH = 1440
 WINDOW_HEIGHT = 860
 
@@ -424,7 +424,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="TITAN CLEANER",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=C["accent"]).pack(side="left", padx=12)
-        ctk.CTkLabel(top, text="v4.2",
+        ctk.CTkLabel(top, text="v4.3",
                      font=ctk.CTkFont(size=11),
                      text_color=C["text3"]).pack(side="left")
 
@@ -480,7 +480,8 @@ class App(ctk.CTk):
         out_row.pack(fill="x", padx=6, pady=(0, 6))
         ctk.CTkLabel(out_row, text="Сохранять в:", font=ctk.CTkFont(size=10),
                      text_color=C["text2"]).pack(side="left")
-        self.output_var = ctk.StringVar(value=self._saved_output or "./cleaned")
+        _default_out = str(get_app_dir() / "cleaned")
+        self.output_var = ctk.StringVar(value=self._saved_output or _default_out)
         ctk.CTkEntry(out_row, textvariable=self.output_var,
                      fg_color=C["input"], border_color=C["border"],
                      text_color=C["text"], font=ctk.CTkFont(size=10)).pack(side="left", fill="x", expand=True, padx=4)
@@ -717,14 +718,14 @@ class App(ctk.CTk):
 
         btn_w, btn_h = 150, 34
         self.btn_detect = ctk.CTkButton(
-            btn_row, text="АВТОПОИСК", width=btn_w, height=btn_h,
+            btn_row, text="ПОИСК", width=btn_w, height=btn_h,
             fg_color=C["blue"], hover_color=C["blue_h"],
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._auto_detect_start)
         self.btn_detect.pack(side="left", padx=4)
 
         self.btn_process = ctk.CTkButton(
-            btn_row, text="ОБРАБОТАТЬ", width=btn_w, height=btn_h,
+            btn_row, text="ОБРАБОТКА", width=btn_w, height=btn_h,
             fg_color=C["accent"], hover_color=C["accent_h"],
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._start_processing)
@@ -1450,7 +1451,7 @@ class App(ctk.CTk):
     def _process_combined(self):
         """Обработка: объединяет ручные правила + автодетект для каждого файла."""
         manual_rules = self._build_replacement_rules()
-        output_dir = self.output_var.get()
+        output_dir = str(Path(self.output_var.get()).resolve())
         try:
             ensure_output_dir(output_dir)
         except Exception as e:
@@ -1555,6 +1556,7 @@ class App(ctk.CTk):
         db.close()
         summary = ", ".join(f"{k}:{v}" for k, v in total_matches.items()) if total_matches else "замен нет"
         self.after(0, lambda: self._log(f"Готово. {summary}", "info"))
+        self.after(0, lambda d=output_dir: self._log(f"Файлы → {d}", "success"))
         self.after(0, lambda: self.progress_label.configure(text=f"Готово. {summary}"))
         self._finish()
 

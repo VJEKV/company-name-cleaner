@@ -728,6 +728,13 @@ def _auto_replacement(entity_type: str, original: str) -> str:
 
 # ── Детекторы ────────────────────────────────────────────────
 
+# Плейсхолдеры шаблонов документов — не фамилии
+_TEMPLATE_PLACEHOLDERS = frozenset({
+    'Фамилия', 'Подпись', 'Группа', 'Отдел', 'Копию', 'Принял',
+    'Должность', 'Дата', 'Место', 'Номер', 'Печать',
+})
+
+
 def _is_likely_surname(word: str) -> bool:
     """Проверяет, похоже ли слово на фамилию по морфологии."""
     if len(word) < 3:
@@ -737,6 +744,8 @@ def _is_likely_surname(word: str) -> bool:
     if not all(c.isalpha() for c in word):
         return False
     if word in FALSE_POSITIVE_SURNAMES:
+        return False
+    if word in _TEMPLATE_PLACEHOLDERS:
         return False
     if is_city(word):
         return False
@@ -848,6 +857,9 @@ def _is_likely_surname_with_initials(word: str) -> bool:
         return False
     if word in ALL_FIRST_NAMES:
         return False
+    # Плейсхолдеры шаблонов документов
+    if word in _TEMPLATE_PLACEHOLDERS:
+        return False
     return True
 
 
@@ -882,10 +894,28 @@ def detect_surname_initials(text: str) -> list[DetectedEntity]:
     return entities
 
 
+# Маркеры контекста «персоны» — слова, указывающие что рядом стоит фамилия
+_PERSON_CONTEXT_MARKERS = (
+    # Должности и роли
+    'директор', 'генеральн', 'главн', 'инженер', 'бухгалтер',
+    'представител', 'руководител', 'специалист', 'начальник',
+    'заместител', 'менеджер', 'мастер', 'прораб', 'диспетчер',
+    'механик', 'технолог', 'контролёр', 'контролер', 'оператор',
+    'ответственн', 'исполнител', 'работник', 'сотрудник',
+    # Юридические обороты
+    'в лице', 'от имени', 'действующ', 'подписант', 'уполномоч',
+    'доверенност', 'на основании', 'именуем', 'далее именуем',
+    'зарегистрирован',
+    # Формулы подписи
+    'подпись', '________', '/_', 'м.п.',
+)
+
+
 def detect_standalone_surnames(text: str, already_found: set[tuple] = None) -> list[DetectedEntity]:
     """
     Обнаруживает отдельные фамилии (без инициалов).
-    Ищет слова с характерными окончаниями, проверяет контекст.
+    Ищет слова с характерными окончаниями, ТРЕБУЕТ контекст «персоны»
+    (должность, юр. оборот, формула подписи или имя из справочника рядом).
     already_found — множество (start, end) уже найденных сущностей.
     """
     if already_found is None:
@@ -896,6 +926,10 @@ def detect_standalone_surnames(text: str, already_found: set[tuple] = None) -> l
     for m in re.finditer(r'\b([А-ЯЁ][а-яё]{2,})\b', text):
         word = m.group(1)
         start, end = m.start(), m.end()
+
+        # Пропускаем плейсхолдеры шаблонов
+        if word in _TEMPLATE_PLACEHOLDERS:
+            continue
 
         # Пропускаем уже найденные
         overlaps = False
@@ -910,8 +944,8 @@ def detect_standalone_surnames(text: str, already_found: set[tuple] = None) -> l
             continue
 
         # Контекстная проверка: что вокруг?
-        ctx_start = max(0, start - 50)
-        ctx_end = min(len(text), end + 50)
+        ctx_start = max(0, start - 80)
+        ctx_end = min(len(text), end + 80)
         context = text[ctx_start:ctx_end]
 
         if is_whitelisted_in_context(word, context):
@@ -927,14 +961,44 @@ def detect_standalone_surnames(text: str, already_found: set[tuple] = None) -> l
         )):
             continue
 
-        # Повышаем уверенность если рядом есть признаки ФИО
-        confidence = 0.7
-        # Проверяем: стоит ли после слова имя из справочника?
-        after = text[end:min(end + 30, len(text))]
-        for name in ALL_FIRST_NAMES:
-            if after.lstrip().startswith(name):
-                confidence = 0.9
+        # ── ТРЕБУЕМ положительный контекст «персоны» ──
+        context_lower = context.lower()
+        has_person_context = False
+
+        # 1) Маркеры должностей/юр. оборотов/подписей в окрестности
+        for marker in _PERSON_CONTEXT_MARKERS:
+            if marker in context_lower:
+                has_person_context = True
                 break
+
+        # 2) Имя из справочника после слова
+        if not has_person_context:
+            after = text[end:min(end + 30, len(text))]
+            for name in ALL_FIRST_NAMES:
+                if after.lstrip().startswith(name):
+                    has_person_context = True
+                    break
+
+        # 3) Имя из справочника перед словом
+        if not has_person_context:
+            before = text[max(0, start - 30):start]
+            for name in ALL_FIRST_NAMES:
+                if before.rstrip().endswith(name):
+                    has_person_context = True
+                    break
+
+        # 4) Рядом (±100 символов) есть уже найденная surname-сущность
+        if not has_person_context:
+            for fs, fe in already_found:
+                if abs(start - fs) < 100 or abs(start - fe) < 100:
+                    has_person_context = True
+                    break
+
+        # Без контекста — не берём
+        if not has_person_context:
+            continue
+
+        confidence = 0.85
 
         entities.append(DetectedEntity(
             start=start, end=end, text=word,
@@ -1437,14 +1501,11 @@ def detect_addresses(text: str) -> list[DetectedEntity]:
 
 # ── Основной API ─────────────────────────────────────────────
 
-def auto_detect_all(text: str) -> list[DetectedEntity]:
+def _detect_all_in_text(text: str) -> list[DetectedEntity]:
     """
-    Запускает все детекторы и возвращает дедуплицированный список сущностей,
-    отсортированный по позиции в тексте.
+    Запускает все детекторы для фрагмента текста.
+    НЕ сбрасывает счётчики/кэш — для вызова в цикле по страницам.
     """
-    _reset_counters()
-    _replacement_cache.clear()
-
     all_entities: list[DetectedEntity] = []
 
     # Высокоточные детекторы (порядок важен — длинные совпадения первыми)
@@ -1465,6 +1526,17 @@ def auto_detect_all(text: str) -> list[DetectedEntity]:
     return _deduplicate(all_entities)
 
 
+def auto_detect_all(text: str) -> list[DetectedEntity]:
+    """
+    Запускает все детекторы и возвращает дедуплицированный список сущностей,
+    отсортированный по позиции в тексте.
+    Сбрасывает счётчики/кэш — для одноразового вызова.
+    """
+    _reset_counters()
+    _replacement_cache.clear()
+    return _detect_all_in_text(text)
+
+
 def auto_detect_in_file(filepath: str) -> dict:
     """
     Запускает автодетекцию для файла.
@@ -1480,9 +1552,6 @@ def auto_detect_in_file(filepath: str) -> dict:
     """
     import os
     ext = os.path.splitext(filepath)[1].lower()
-
-    _reset_counters()
-    _replacement_cache.clear()
 
     if ext == '.docx':
         return _detect_in_docx(filepath)
@@ -1571,6 +1640,7 @@ def _detect_in_docx(filepath: str) -> dict:
                 page_paragraphs.append(current)
 
     # Строим pages dict и полный текст
+    # НЕ сбрасываем счётчики/кэш — это делает вызывающий код один раз
     pages = {}
     all_entities = []
     full_text_parts = []
@@ -1581,7 +1651,7 @@ def _detect_in_docx(filepath: str) -> dict:
         page_num = i + 1
         pages[page_num] = page_text
 
-        page_entities = auto_detect_all(page_text)
+        page_entities = _detect_all_in_text(page_text)
         for e in page_entities:
             e.start += offset
             e.end += offset
@@ -1653,6 +1723,7 @@ def _detect_in_pdf(filepath: str) -> dict:
             "error": str(e),
         }
 
+    # НЕ сбрасываем счётчики/кэш — это делает вызывающий код один раз
     pages = {}
     all_entities = []
     full_text_parts = []
@@ -1672,8 +1743,8 @@ def _detect_in_pdf(filepath: str) -> dict:
 
         pages[page_num + 1] = page_text
 
-        # Детектим на каждой странице отдельно
-        page_entities = auto_detect_all(page_text)
+        # Детектим на каждой странице (кэш общий — одна сущность → один псевдоним)
+        page_entities = _detect_all_in_text(page_text)
 
         # Корректируем позиции с учётом общего смещения
         for e in page_entities:
