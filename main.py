@@ -1,5 +1,5 @@
 """
-Titan Cleaner v4.3 — портативное GUI-приложение.
+Titan Cleaner v5.2 — портативное GUI-приложение.
 Анонимизация и деанонимизация документов (.docx, .pdf, .xlsx).
 Двухпанельный интерфейс: управление слева, предпросмотр текста справа.
 Маппинг хранится в SQLite базе.
@@ -52,7 +52,7 @@ from core.replacements import (
     ReplacementMapper,
 )
 from core.english_pseudonyms import EnglishPseudonymGenerator
-from core.database import SessionDB
+from core.database import SessionDB, UserDictionary
 from core.docx_cleaner import clean_docx, preview_docx
 from core.pdf_cleaner import clean_pdf_text_mode, clean_pdf_stamp_mode, preview_pdf
 from core.xlsx_cleaner import clean_xlsx, preview_xlsx, extract_text_xlsx, is_openpyxl_available
@@ -65,7 +65,7 @@ from core.auto_detect import (
     get_type_name, _reset_counters, _replacement_cache,
 )
 
-APP_TITLE = "Titan Cleaner v4.3"
+APP_TITLE = "Titan Cleaner v5.2"
 WINDOW_WIDTH = 1440
 WINDOW_HEIGHT = 860
 
@@ -424,7 +424,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="TITAN CLEANER",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=C["accent"]).pack(side="left", padx=12)
-        ctk.CTkLabel(top, text="v4.3",
+        ctk.CTkLabel(top, text="v5.2",
                      font=ctk.CTkFont(size=11),
                      text_color=C["text3"]).pack(side="left")
 
@@ -985,11 +985,28 @@ class App(ctk.CTk):
                         self._render_file_preview(r)
                         break
 
+                # Предлагаем добавить в исключения
+                self._ask_add_exclusion(search)
+
                 # Обновляем сводку, карту, счётчик
                 total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
                 self.found_label.configure(text=f"Найдено: {total}" if total else "")
                 self._update_map_panel()
                 self._update_used_replacements()
+
+    def _ask_add_exclusion(self, word: str):
+        if messagebox.askyesno("Исключение",
+                f"Добавить «{word}» в исключения?\n"
+                "Больше не будет определяться при автопоиске."):
+            UserDictionary.add(word, "exclusion")
+            self._log(f"+ исключение: {word}", "info")
+
+    def _ask_add_inclusion(self, word: str, entity_type: str):
+        if messagebox.askyesno("Автопоиск",
+                f"Запомнить «{word}» для автопоиска?\n"
+                "Будет определяться в будущих файлах."):
+            UserDictionary.add(word, "inclusion", entity_type)
+            self._log(f"+ автопоиск: {word}", "info")
 
     # ── Hotkeys ──
 
@@ -1313,6 +1330,8 @@ class App(ctk.CTk):
                 self._update_map_panel()
                 self._update_used_replacements()
                 break
+
+        self._ask_add_inclusion(sel, etype)
 
     # ── Auto-detect ──
 

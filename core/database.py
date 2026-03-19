@@ -55,6 +55,16 @@ def _ensure_tables(conn: sqlite3.Connection):
 
         CREATE INDEX IF NOT EXISTS idx_mappings_file ON mappings(file_mapping_id);
         CREATE INDEX IF NOT EXISTS idx_file_mappings_session ON file_mappings(session_id);
+
+        CREATE TABLE IF NOT EXISTS user_dictionary (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            word TEXT NOT NULL COLLATE NOCASE,
+            dict_type TEXT NOT NULL CHECK(dict_type IN ('exclusion', 'inclusion')),
+            entity_type TEXT DEFAULT '',
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            UNIQUE(word, dict_type)
+        );
+        CREATE INDEX IF NOT EXISTS idx_user_dict_type ON user_dictionary(dict_type);
     """)
     conn.commit()
 
@@ -198,6 +208,52 @@ class SessionDB:
                 "ORDER BY s.created_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
+            return [dict(r) for r in rows]
+        finally:
+            conn.close()
+
+
+class UserDictionary:
+    """Словарь исключений и включений для автопоиска."""
+
+    @staticmethod
+    def add(word: str, dict_type: str, entity_type: str = "") -> bool:
+        conn = get_connection()
+        try:
+            conn.execute(
+                "INSERT OR IGNORE INTO user_dictionary (word, dict_type, entity_type) VALUES (?, ?, ?)",
+                (word.strip(), dict_type, entity_type))
+            conn.commit()
+            return conn.total_changes > 0
+        finally:
+            conn.close()
+
+    @staticmethod
+    def remove(word: str, dict_type: str) -> bool:
+        conn = get_connection()
+        try:
+            conn.execute(
+                "DELETE FROM user_dictionary WHERE word = ? COLLATE NOCASE AND dict_type = ?",
+                (word.strip(), dict_type))
+            conn.commit()
+            return conn.total_changes > 0
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_exclusions() -> set[str]:
+        conn = get_connection()
+        try:
+            rows = conn.execute("SELECT word FROM user_dictionary WHERE dict_type = 'exclusion'").fetchall()
+            return {row["word"].lower() for row in rows}
+        finally:
+            conn.close()
+
+    @staticmethod
+    def get_inclusions() -> list[dict]:
+        conn = get_connection()
+        try:
+            rows = conn.execute("SELECT word, entity_type FROM user_dictionary WHERE dict_type = 'inclusion'").fetchall()
             return [dict(r) for r in rows]
         finally:
             conn.close()

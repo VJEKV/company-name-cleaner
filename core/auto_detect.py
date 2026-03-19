@@ -1522,8 +1522,65 @@ def _detect_all_in_text(text: str) -> list[DetectedEntity]:
     found_ranges = {(e.start, e.end) for e in all_entities}
     all_entities.extend(detect_standalone_surnames(text, found_ranges))
 
-    # Дедупликация: убираем пересечения, приоритет длинным
-    return _deduplicate(all_entities)
+    # Пользовательские включения
+    all_entities.extend(_detect_user_inclusions(text))
+
+    # Дедупликация + фильтрация исключений
+    deduped = _deduplicate(all_entities)
+    return _filter_exclusions(deduped)
+
+
+# ── Пользовательский словарь ──
+
+_exclusions_cache: set | None = None
+_inclusions_cache: list | None = None
+
+
+def _reload_user_dict():
+    global _exclusions_cache, _inclusions_cache
+    _exclusions_cache = None
+    _inclusions_cache = None
+
+
+def _filter_exclusions(entities: list[DetectedEntity]) -> list[DetectedEntity]:
+    global _exclusions_cache
+    if _exclusions_cache is None:
+        try:
+            from core.database import UserDictionary
+            _exclusions_cache = UserDictionary.get_exclusions()
+        except Exception:
+            _exclusions_cache = set()
+    if not _exclusions_cache:
+        return entities
+    return [e for e in entities if e.text.lower() not in _exclusions_cache]
+
+
+def _detect_user_inclusions(text: str) -> list[DetectedEntity]:
+    global _inclusions_cache
+    if _inclusions_cache is None:
+        try:
+            from core.database import UserDictionary
+            _inclusions_cache = UserDictionary.get_inclusions()
+        except Exception:
+            _inclusions_cache = []
+    if not _inclusions_cache:
+        return []
+    entities = []
+    text_lower = text.lower()
+    for inc in _inclusions_cache:
+        word = inc["word"]
+        etype = inc.get("entity_type", "") or ENTITY_PERSON
+        word_lower = word.lower()
+        start = 0
+        while True:
+            idx = text_lower.find(word_lower, start)
+            if idx < 0:
+                break
+            entities.append(DetectedEntity(
+                text=text[idx:idx + len(word)], start=idx, end=idx + len(word),
+                entity_type=etype, replacement=_auto_replacement(etype, text[idx:idx + len(word)])))
+            start = idx + len(word)
+    return entities
 
 
 def auto_detect_all(text: str) -> list[DetectedEntity]:
@@ -1534,6 +1591,7 @@ def auto_detect_all(text: str) -> list[DetectedEntity]:
     """
     _reset_counters()
     _replacement_cache.clear()
+    _reload_user_dict()
     return _detect_all_in_text(text)
 
 

@@ -11,6 +11,8 @@ jobs:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      PYTHONUTF8: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -27,8 +29,6 @@ jobs:
 
       - name: Generate stamps
         run: python generate_stamps.py
-        env:
-          PYTHONUTF8: "1"
 
       - name: Find customtkinter path
         id: ctk
@@ -36,16 +36,6 @@ jobs:
         run: |
           $ctkPath = python -c "import customtkinter; import os; print(os.path.dirname(customtkinter.__file__))"
           echo "CTK_PATH=$ctkPath" >> $env:GITHUB_OUTPUT
-          echo "Found customtkinter at: $ctkPath"
-
-      - name: Verify customtkinter assets
-        shell: pwsh
-        run: |
-          $ctkPath = "${{ steps.ctk.outputs.CTK_PATH }}"
-          echo "=== customtkinter directory ==="
-          Get-ChildItem -Path $ctkPath -Recurse -File | Select-Object FullName, Length | Format-Table -AutoSize
-          echo "=== JSON theme files ==="
-          Get-ChildItem -Path $ctkPath -Recurse -Filter "*.json" | Select-Object FullName
 
       - name: Build EXE
         shell: pwsh
@@ -62,25 +52,24 @@ jobs:
             --hidden-import core.database `
             --collect-all customtkinter `
             main.py
-          echo "=== Build result ==="
           Get-ChildItem dist\TitanCleaner.exe | Format-Table Name, Length
 
       - name: Prepare portable folder
         shell: pwsh
         run: |
-          # Создаём папку для portable-сборки
           New-Item -ItemType Directory -Path dist\portable\TitanCleaner -Force
-          # Перемещаем .exe
           Move-Item dist\TitanCleaner.exe dist\portable\TitanCleaner\ -Force
-          echo "EXE moved to portable folder"
 
       - name: Install Tesseract via choco
+        continue-on-error: true
         run: choco install tesseract --no-progress -y
 
       - name: Bundle portable Tesseract
+        continue-on-error: true
         shell: pwsh
         run: |
           $src = "C:\Program Files\Tesseract-OCR"
+          if (-not (Test-Path "$src\tesseract.exe")) { echo "Tesseract not found"; exit 0 }
           $dst = "dist\portable\TitanCleaner\tesseract"
           New-Item -ItemType Directory -Path "$dst\tessdata" -Force
           Copy-Item "$src\tesseract.exe" "$dst\"
@@ -89,13 +78,11 @@ jobs:
           Copy-Item "$src\tessdata\osd.traineddata" "$dst\tessdata\"
           $rusUrl = "https://github.com/tesseract-ocr/tessdata/raw/main/rus.traineddata"
           Invoke-WebRequest -Uri $rusUrl -OutFile "$dst\tessdata\rus.traineddata"
-          Get-ChildItem -Recurse "$dst" | Format-Table Name, Length
 
       - name: Package portable ZIP
         shell: pwsh
         run: |
           Compress-Archive -Path dist\portable\TitanCleaner -DestinationPath dist\TitanCleaner-Portable.zip
-          echo "=== Final ZIP ==="
           Get-ChildItem dist\TitanCleaner-Portable.zip | Format-Table Name, Length
 
       - name: Upload artifact
