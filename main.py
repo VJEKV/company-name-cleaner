@@ -518,12 +518,6 @@ class App(ctk.CTk):
                         button_color=C["gray"], dropdown_fg_color=C["surface"],
                         text_color=C["text"], font=ctk.CTkFont(size=9)).pack(side="left", padx=2)
 
-        ocr_row = ctk.CTkFrame(pdf_frame, fg_color="transparent")
-        ocr_row.pack(fill="x", padx=6, pady=(0, 4))
-        self.ocr_enabled = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(ocr_row, text="OCR", variable=self.ocr_enabled,
-                        fg_color=C["blue"], font=ctk.CTkFont(size=10)).pack(side="left")
-
         # -- Лог --
         self._section(left, "ЛОГ")
         self.log_text = ctk.CTkTextbox(left, height=100, corner_radius=4,
@@ -1525,10 +1519,10 @@ class App(ctk.CTk):
                     res = clean_docx(fp, out, combined_rules)
                 elif ext == '.pdf':
                     if self.pdf_mode.get() == "text":
-                        res = clean_pdf_text_mode(fp, out, combined_rules, ocr_enabled=self.ocr_enabled.get())
+                        res = clean_pdf_text_mode(fp, out, combined_rules, ocr_enabled=True)
                     else:
                         res = clean_pdf_stamp_mode(fp, out, combined_rules, stamp_path=self._get_stamp_path(),
-                                                    stamp_type=self.stamp_var.get(), ocr_enabled=self.ocr_enabled.get())
+                                                    stamp_type=self.stamp_var.get(), ocr_enabled=True)
                 elif ext in ('.xlsx', '.xls'):
                     res = clean_xlsx(fp, out, combined_rules)
                 else:

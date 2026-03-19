@@ -1824,18 +1824,11 @@ def _detect_in_docx(filepath: str) -> dict:
 def _ocr_page(page) -> str:
     """OCR страницы PDF через tesseract (для сканов)."""
     try:
-        import pytesseract
-        from PIL import Image
-        import io
-
-        # Рендерим страницу в изображение (300 DPI)
-        pix = page.get_pixmap(dpi=300)
-        img_data = pix.tobytes("png")
-        img = Image.open(io.BytesIO(img_data))
-
-        # OCR с русским языком
-        text = pytesseract.image_to_string(img, lang='rus+eng')
-        return text
+        from core.ocr_utils import is_tesseract_available, ocr_page, reconstruct_text_from_ocr
+        if not is_tesseract_available():
+            return ""
+        ocr_words = ocr_page(page, dpi=300, lang='rus+eng')
+        return reconstruct_text_from_ocr(ocr_words)
     except Exception:
         return ""
 
