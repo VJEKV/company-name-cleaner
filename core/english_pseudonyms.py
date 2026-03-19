@@ -142,30 +142,44 @@ class EnglishPseudonymGenerator:
 
     def next_city(self) -> str:
         """Следующий уникальный английский город."""
-        city = ENGLISH_CITIES[self._city_idx % len(ENGLISH_CITIES)]
-        self._city_idx += 1
-        return city
+        for _ in range(200):
+            city = ENGLISH_CITIES[self._city_idx % len(ENGLISH_CITIES)]
+            self._city_idx += 1
+            if city not in self._used_cities:
+                self._used_cities.add(city)
+                return city
+        return f"City-{self._city_idx}"
 
     def next_company(self) -> str:
         """Следующая уникальная английская компания."""
-        company = ENGLISH_COMPANIES[self._company_idx % len(ENGLISH_COMPANIES)]
-        self._company_idx += 1
-        return company
+        for _ in range(200):
+            company = ENGLISH_COMPANIES[self._company_idx % len(ENGLISH_COMPANIES)]
+            self._company_idx += 1
+            if company not in self._used_companies:
+                self._used_companies.add(company)
+                return company
+        return f"Company-{self._company_idx}"
 
     def next_full_name(self, gender: str = "male") -> str:
         """Следующее уникальное английское ФИО (First M. Last)."""
-        if gender == "female":
-            first = ENGLISH_FEMALE_FIRST[self._first_female_idx % len(ENGLISH_FEMALE_FIRST)]
-            self._first_female_idx += 1
-        else:
-            first = ENGLISH_MALE_FIRST[self._first_male_idx % len(ENGLISH_MALE_FIRST)]
-            self._first_male_idx += 1
+        for _ in range(500):  # защита от бесконечного цикла
+            if gender == "female":
+                first = ENGLISH_FEMALE_FIRST[self._first_female_idx % len(ENGLISH_FEMALE_FIRST)]
+                self._first_female_idx += 1
+            else:
+                first = ENGLISH_MALE_FIRST[self._first_male_idx % len(ENGLISH_MALE_FIRST)]
+                self._first_male_idx += 1
 
-        surname = ENGLISH_SURNAMES[self._surname_idx % len(ENGLISH_SURNAMES)]
-        mid = ENGLISH_MIDDLE_INITIALS[self._surname_idx % len(ENGLISH_MIDDLE_INITIALS)]
-        self._surname_idx += 1
+            surname = ENGLISH_SURNAMES[self._surname_idx % len(ENGLISH_SURNAMES)]
+            mid = ENGLISH_MIDDLE_INITIALS[self._surname_idx % len(ENGLISH_MIDDLE_INITIALS)]
+            self._surname_idx += 1
 
-        return f"{first} {mid}. {surname}"
+            name = f"{first} {mid}. {surname}"
+            if name not in self._used_names:
+                self._used_names.add(name)
+                return name
+        # Fallback — добавляем номер
+        return f"{first} {mid}. {surname} #{self._surname_idx}"
 
     def next_surname_with_initials(self) -> str:
         """Следующая фамилия с инициалами: J.R. Smith."""
