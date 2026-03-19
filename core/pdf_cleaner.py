@@ -157,10 +157,11 @@ def _open_and_check(filepath: str) -> tuple:
     return doc, None
 
 
-def _is_page_scanned(page, min_chars: int = 10) -> bool:
-    """Проверяет, является ли страница сканом."""
-    text = page.get_text()
-    return len(text.strip()) < min_chars
+def _is_page_scanned(page) -> bool:
+    """Проверяет, является ли страница сканом (мало букв в текстовом слое)."""
+    text = page.get_text().strip()
+    alpha_chars = sum(1 for c in text if c.isalpha())
+    return alpha_chars < 50
 
 
 def _get_page_text_and_rects(page, replacement_rules, ocr_enabled, ocr_dpi, ocr_lang):
@@ -173,7 +174,11 @@ def _get_page_text_and_rects(page, replacement_rules, ocr_enabled, ocr_dpi, ocr_
       - ocr_words: список OCR-слов (если use_ocr) или None
     """
     page_text = page.get_text()
-    is_scan = len(page_text.strip()) < 10
+    clean_text = page_text.strip()
+    # Страница считается сканом если мало текста ИЛИ текст мусорный
+    # (менее 50 символов кириллицы/латиницы)
+    alpha_chars = sum(1 for c in clean_text if c.isalpha())
+    is_scan = alpha_chars < 50
 
     if not is_scan:
         return page_text, False, None
