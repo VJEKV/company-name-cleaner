@@ -1,7 +1,7 @@
 """
 Titan Cleaner v5.3 — портативное GUI-приложение.
 Анонимизация и деанонимизация документов (.docx, .pdf, .xlsx).
-Двухпанельный интерфейс: управление слева, предпросмотр текста справа.
+Regex-детект + обучаемый словарь исключений/включений, кликабельная карта замен.
 Маппинг хранится в SQLite базе.
 """
 
@@ -424,7 +424,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="TITAN CLEANER",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=C["accent"]).pack(side="left", padx=12)
-        ctk.CTkLabel(top, text="v5.3",
+        ctk.CTkLabel(top, text="v4.3",
                      font=ctk.CTkFont(size=11),
                      text_color=C["text3"]).pack(side="left")
 
@@ -636,6 +636,9 @@ class App(ctk.CTk):
         self.preview_text.tag_config("page_header", foreground="#999999", background="#e8e8e8")
         self.preview_text.tag_config("page_gap", foreground="#cccccc", background="#cccccc")
 
+        # Метки сущностей для навигации из карты замен: {entity_text_lower -> mark_name}
+        self._entity_marks: dict[str, str] = {}
+
         # Привязка выделения текста
         self.preview_text.bind("<<Selection>>", self._on_text_selected)
         self.preview_text.bind("<ButtonRelease-1>", self._on_text_selected)
@@ -793,12 +796,19 @@ class App(ctk.CTk):
             "passport": "Пасп",
         }
 
-        # Собираем данные по группам: group_key -> [(label, src_text, repl_text, source)]
+        # Собираем данные по группам: group_key -> [(label, src_text, repl_text, source, occurrences)]
         groups_data = {}
         seen = set()
+        occurrence_count = {}  # key -> количество вхождений
         count = 0
 
-        # Авто-замены
+        # Считаем вхождения каждой сущности
+        for res in self._last_detect_results:
+            for e in res.get("entities", []):
+                okey = e.text.lower()
+                occurrence_count[okey] = occurrence_count.get(okey, 0) + 1
+
+        # Авто-замены (уникальные)
         for res in self._last_detect_results:
             for e in res.get("entities", []):
                 key = e.text.lower()
@@ -808,8 +818,9 @@ class App(ctk.CTk):
                 count += 1
                 grp = type_to_group.get(e.entity_type, "organization")
                 label = type_label.get(e.entity_type, "?")
+                occ = occurrence_count.get(key, 1)
                 groups_data.setdefault(grp, []).append(
-                    (label, e.text, e.replacement, "авто"))
+                    (label, e.text, e.replacement, "авто", occ))
 
         # Ручные правила
         for row in self.field_rows:
@@ -828,7 +839,7 @@ class App(ctk.CTk):
             grp = type_to_group.get(etype, "organization")
             label = type_label.get(etype, "?")
             groups_data.setdefault(grp, []).append(
-                (label, search, replace, "ручн"))
+                (label, search, replace, "ручн", 0))
 
         # Очищаем старые виджеты
         for w in self._map_groups_container.winfo_children():
@@ -864,26 +875,49 @@ class App(ctk.CTk):
             gw["btn"] = btn
 
             # Элементы группы
-            for label, src, repl, source in items:
-                row_f = ctk.CTkFrame(body, fg_color="transparent")
+            for label, src, repl, source, occ in items:
+                row_f = ctk.CTkFrame(body, fg_color="transparent", cursor="hand2")
                 row_f.pack(fill="x", padx=4, pady=(1, 2))
 
-                # Верхняя строка: исходный текст + [источник]
+                # Клик по строке — навигация к сущности в превью
+                row_f.bind("<Button-1>", lambda e, s=src: self._scroll_to_entity(s))
+
+                # Верхняя строка: [×] исходный текст (N) [источник]
                 top_row = ctk.CTkFrame(row_f, fg_color="transparent")
                 top_row.pack(fill="x")
+
+                # Кнопка удаления ×
+                del_btn = ctk.CTkButton(
+                    top_row, text="×", width=18, height=18,
+                    fg_color="transparent", hover_color=C["accent"],
+                    text_color=C["text3"], font=ctk.CTkFont(size=11),
+                    command=lambda s=src, st=source: self._remove_entity(s, st))
+                del_btn.pack(side="left")
+
                 src_color = C["blue"] if source == "авто" else C["m_surname"]
-                ctk.CTkLabel(top_row, text=f"[{source}]", font=ctk.CTkFont(size=9),
-                             text_color=src_color, width=36).pack(side="right")
-                ctk.CTkLabel(top_row, text=src, font=ctk.CTkFont(family="Consolas", size=11),
-                             text_color=grp_color, anchor="w", wraplength=220).pack(side="left", fill="x")
+                source_lbl = ctk.CTkLabel(top_row, text=f"[{source}]", font=ctk.CTkFont(size=9),
+                             text_color=src_color, width=36)
+                source_lbl.pack(side="right")
+                # Количество вхождений
+                occ_text = f" ({occ})" if occ > 1 else ""
+                src_lbl = ctk.CTkLabel(top_row, text=f"{src}{occ_text}",
+                             font=ctk.CTkFont(family="Consolas", size=11),
+                             text_color=grp_color, anchor="w", wraplength=200)
+                src_lbl.pack(side="left", fill="x")
 
                 # Нижняя строка: стрелка + замена
                 bot_row = ctk.CTkFrame(row_f, fg_color="transparent")
                 bot_row.pack(fill="x")
-                ctk.CTkLabel(bot_row, text="  → ", font=ctk.CTkFont(size=10),
-                             text_color=C["text3"]).pack(side="left")
-                ctk.CTkLabel(bot_row, text=repl, font=ctk.CTkFont(family="Consolas", size=11),
-                             text_color=C["green"], anchor="w", wraplength=220).pack(side="left", fill="x")
+                arrow_lbl = ctk.CTkLabel(bot_row, text="  → ", font=ctk.CTkFont(size=10),
+                             text_color=C["text3"])
+                arrow_lbl.pack(side="left")
+                repl_lbl = ctk.CTkLabel(bot_row, text=repl, font=ctk.CTkFont(family="Consolas", size=11),
+                             text_color=C["green"], anchor="w", wraplength=220)
+                repl_lbl.pack(side="left", fill="x")
+
+                # Пробрасываем клик с дочерних виджетов на row_f
+                for widget in (top_row, src_lbl, source_lbl, bot_row, arrow_lbl, repl_lbl):
+                    widget.bind("<Button-1>", lambda e, s=src: self._scroll_to_entity(s))
 
         arrow = "▾" if self._map_expanded else "▸"
         self.map_toggle_btn.configure(text=f"{arrow} КАРТА ЗАМЕН ({count})")
@@ -895,6 +929,54 @@ class App(ctk.CTk):
                          "Адрес": "address", "Своё поле": "address"}.get(row.field_type, "organization")
             used = self._get_used_replacements(row_etype)
             row.update_used_marks(used)
+
+    def _remove_entity(self, entity_text: str, source: str):
+        """Удаляет сущность из результатов детекции и обновляет превью."""
+        if source == "авто":
+            # Удаляем из авто-результатов
+            for res in self._last_detect_results:
+                entities = res.get("entities", [])
+                res["entities"] = [e for e in entities
+                                   if e.text.lower() != entity_text.lower()]
+            # Удаляем из превью-сущностей
+            self._preview_entities = [e for e in self._preview_entities
+                                       if e.text.lower() != entity_text.lower()]
+        else:
+            # Удаляем ручное правило
+            for row in self.field_rows:
+                if not row.is_empty() and row.get_search().lower() == entity_text.lower():
+                    row.clear()
+                    break
+        # Предлагаем добавить в исключения
+        if source == "авто":
+            self._ask_add_exclusion(entity_text)
+        # Перерисовываем превью и карту
+        self._render_all_pages()
+        self._update_map_panel()
+
+    def _ask_add_exclusion(self, word: str):
+        if messagebox.askyesno("Исключение",
+                f"Добавить «{word}» в исключения?\n"
+                "Больше не будет определяться при автопоиске."):
+            UserDictionary.add(word, "exclusion")
+            self._log(f"+ исключение: {word}", "info")
+
+    def _ask_add_inclusion(self, word: str, entity_type: str):
+        if messagebox.askyesno("Автопоиск",
+                f"Запомнить «{word}» для автопоиска?\n"
+                "Будет определяться в будущих файлах."):
+            UserDictionary.add(word, "inclusion", entity_type)
+            self._log(f"+ автопоиск: {word}", "info")
+
+    def _scroll_to_entity(self, entity_text: str):
+        """Скроллит превью к первому вхождению сущности (навигация из карты замен)."""
+        mark = self._entity_marks.get(entity_text.lower())
+        if mark:
+            try:
+                self.preview_text._textbox.see(mark)
+                self.after(50, lambda: self.preview_text._textbox.yview(mark))
+            except Exception:
+                pass
 
     def _toggle_map_group(self, grp_key):
         """Сворачивает/разворачивает группу аккордеона карты замен."""
@@ -979,28 +1061,11 @@ class App(ctk.CTk):
                         self._render_file_preview(r)
                         break
 
-                # Предлагаем добавить в исключения
-                self._ask_add_exclusion(search)
-
                 # Обновляем сводку, карту, счётчик
                 total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
                 self.found_label.configure(text=f"Найдено: {total}" if total else "")
                 self._update_map_panel()
                 self._update_used_replacements()
-
-    def _ask_add_exclusion(self, word: str):
-        if messagebox.askyesno("Исключение",
-                f"Добавить «{word}» в исключения?\n"
-                "Больше не будет определяться при автопоиске."):
-            UserDictionary.add(word, "exclusion")
-            self._log(f"+ исключение: {word}", "info")
-
-    def _ask_add_inclusion(self, word: str, entity_type: str):
-        if messagebox.askyesno("Автопоиск",
-                f"Запомнить «{word}» для автопоиска?\n"
-                "Будет определяться в будущих файлах."):
-            UserDictionary.add(word, "inclusion", entity_type)
-            self._log(f"+ автопоиск: {word}", "info")
 
     # ── Hotkeys ──
 
@@ -1150,11 +1215,14 @@ class App(ctk.CTk):
     def _render_all_pages(self):
         """Рендерит все страницы как визуальные «листы» с разделителями."""
         self.preview_text.delete("1.0", "end")
+        self._entity_marks.clear()
 
         if not self._page_keys:
             self.preview_text.insert("end", "(нет текста)")
             self.page_label.configure(text="")
             return
+
+        entity_mark_counter = 0
 
         for i, page_key in enumerate(self._page_keys):
             page_text = self._preview_pages[page_key]
@@ -1186,6 +1254,16 @@ class App(ctk.CTk):
                     continue
                 if local_start > pos:
                     self.preview_text.insert("end", page_text[pos:local_start])
+
+                # Метка для навигации из карты замен (первое вхождение каждой сущности)
+                entity_key = e.text.lower()
+                if entity_key not in self._entity_marks:
+                    emark = f"ent_{entity_mark_counter}"
+                    self.preview_text._textbox.mark_set(emark, "end-1c")
+                    self.preview_text._textbox.mark_gravity(emark, "left")
+                    self._entity_marks[entity_key] = emark
+                    entity_mark_counter += 1
+
                 tag = f"m_{e.entity_type}"
                 self.preview_text.insert("end", page_text[local_start:local_end], tag)
                 pos = local_end
@@ -1446,7 +1524,6 @@ class App(ctk.CTk):
         if not self._validate():
             return
 
-        # Проверяем есть ли PDF среди файлов — спрашиваем включать ли
         has_pdf = any(Path(f).suffix.lower() == '.pdf' for f in self.files)
         if has_pdf:
             answer = messagebox.askyesnocancel(
