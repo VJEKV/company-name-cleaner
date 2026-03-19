@@ -1445,6 +1445,24 @@ class App(ctk.CTk):
             return
         if not self._validate():
             return
+
+        # Проверяем есть ли PDF среди файлов — спрашиваем включать ли
+        has_pdf = any(Path(f).suffix.lower() == '.pdf' for f in self.files)
+        if has_pdf:
+            answer = messagebox.askyesnocancel(
+                "PDF в обработке",
+                "Среди файлов есть PDF.\n\n"
+                "OCR-сканы могут обработаться неточно.\n"
+                "Включить PDF в обработку?\n\n"
+                "Да — обработать все файлы\n"
+                "Нет — пропустить PDF\n"
+                "Отмена — не начинать")
+            if answer is None:
+                return
+            self._skip_pdf = not answer
+        else:
+            self._skip_pdf = False
+
         self._save_current_config()
         self.processing = True
         self.cancel_flag = False
@@ -1487,6 +1505,12 @@ class App(ctk.CTk):
                 break
             fn = Path(fp).name
             ext = Path(fp).suffix.lower()
+
+            if ext == '.pdf' and getattr(self, '_skip_pdf', False):
+                self.after(0, lambda f=fn: self._log(f"~ {f} — PDF пропущен", "warning"))
+                self.after(0, lambda v=(i+1)/n: self.progress.set(v))
+                continue
+
             out = str(Path(output_dir) / fn)
             if os.path.abspath(fp) == os.path.abspath(out):
                 out = str(Path(output_dir) / f"{Path(fp).stem}_cleaned{ext}")
