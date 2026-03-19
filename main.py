@@ -1,5 +1,5 @@
 """
-Titan Cleaner v5.2 — портативное GUI-приложение.
+Titan Cleaner v5.3 — портативное GUI-приложение.
 Анонимизация и деанонимизация документов (.docx, .pdf, .xlsx).
 Двухпанельный интерфейс: управление слева, предпросмотр текста справа.
 Маппинг хранится в SQLite базе.
@@ -65,7 +65,7 @@ from core.auto_detect import (
     get_type_name, _reset_counters, _replacement_cache,
 )
 
-APP_TITLE = "Titan Cleaner v5.2"
+APP_TITLE = "Titan Cleaner v5.3"
 WINDOW_WIDTH = 1440
 WINDOW_HEIGHT = 860
 
@@ -424,7 +424,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="TITAN CLEANER",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=C["accent"]).pack(side="left", padx=12)
-        ctk.CTkLabel(top, text="v5.2",
+        ctk.CTkLabel(top, text="v5.3",
                      font=ctk.CTkFont(size=11),
                      text_color=C["text3"]).pack(side="left")
 

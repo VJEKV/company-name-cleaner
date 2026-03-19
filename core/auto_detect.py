@@ -438,13 +438,14 @@ RE_PHONE_8 = re.compile(
     r'(?<!\d)(8[\s(-]*\d{3}[\s)-]*\d{3}[\s-]*\d{2}[\s-]*\d{2})(?!\d)'
 )
 # Локальные телефоны: (86559) 2-50-08, (495) 123-45-67
+# [^\S\n] = пробелы без переноса строки
 RE_PHONE_LOCAL = re.compile(
-    r'(?:тел\.?|телефон|моб\.?|факс|т\.)\s*:?\s*'
-    r'(\(\d{4,5}\)\s*\d[\d\s-]{4,12}\d)',
+    r'(?:тел\.?|телефон|моб\.?|факс|т\.)[^\S\n]*:?[^\S\n]*'
+    r'(\(\d{4,5}\)[^\S\n]*\d[\d\x20\t-]{4,12}\d)',
     re.IGNORECASE,
 )
 RE_PHONE_LOCAL_BARE = re.compile(
-    r'(?<!\d)(\(\d{4,5}\)\s*\d[\d\s-]{4,12}\d)(?!\d)'
+    r'(?<!\d)(\(\d{4,5}\)[^\S\n]*\d[\d\x20\t-]{4,12}\d)(?!\d)'
 )
 
 # Email
@@ -638,6 +639,37 @@ def _gen_fake_digits(length: int, counter: int) -> str:
     return base[-length:].zfill(length)
 
 
+def _normalize_cache_key(entity_type: str, original: str) -> str:
+    """Нормализует ключ кэша — одна фамилия/организация → один псевдоним."""
+    text = original.strip().lower()
+
+    if entity_type == ENTITY_SURNAME:
+        # Извлекаем фамилию: "шулындина владимира владимировича" → "шулындин"
+        # "в.в. шулындин" → "шулындин"
+        words = text.replace('.', '. ').split()
+        for w in words:
+            w = w.strip('.,;:_')
+            if len(w) >= 3 and w[0].isalpha() and w.isalpha():
+                # Нормализуем окончание: шулындина → шулындин
+                for suffix in ('ого', 'его', 'ича', 'вна', 'вны', 'ину', 'ина', 'ой', 'ая'):
+                    if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+                        w = w[:-len(suffix)]
+                        break
+                return f"{entity_type}:{w}"
+        return f"{entity_type}:{text}"
+
+    if entity_type == ENTITY_ORGANIZATION:
+        # Убираем орг. форму: "ооо «ставролен»" → "ставролен"
+        import re as _re
+        core = _re.sub(
+            r'^(?:ооо|оао|пао|зао|ао|нко|анко|фгуп|фгбу|гуп|муп)\s*', '', text)
+        core = _re.sub(r'[«»""\'"\(\)]', '', core).strip()
+        if core:
+            return f"{entity_type}:{core}"
+
+    return f"{entity_type}:{text}"
+
+
 def _auto_replacement(entity_type: str, original: str) -> str:
     """Генерирует уникальную английскую автозаглушку для сущности."""
     global _surname_counter, _org_counter, _city_counter, _addr_counter
@@ -645,7 +677,7 @@ def _auto_replacement(entity_type: str, original: str) -> str:
     global _account_counter, _snils_counter, _passport_counter
     global _phone_counter, _email_counter, _url_counter
 
-    key = f"{entity_type}:{original.strip().lower()}"
+    key = _normalize_cache_key(entity_type, original)
     if key in _replacement_cache:
         return _replacement_cache[key]
 
@@ -1020,6 +1052,9 @@ def detect_organizations(text: str) -> list[DetectedEntity]:
     for pattern in (RE_ORG_QUOTED, RE_ORG_FULL_QUOTED):
         for m in pattern.finditer(text):
             full = m.group(0)
+            # Ограничение: макс 80 символов, без переносов строк
+            if len(full) > 80 or '\n' in full:
+                continue
             if is_whitelisted_org(full):
                 continue
             name_part = m.group(1).strip()
@@ -1436,6 +1471,9 @@ def detect_addresses(text: str) -> list[DetectedEntity]:
     addr_ranges: set[tuple[int, int]] = set()
 
     def _add_addr(start: int, end: int, addr_text: str, conf: float = 1.0):
+        # Ограничение длины — реальный адрес не длиннее 120 символов
+        if len(addr_text) > 120:
+            return
         # Пропускаем если пересекается с уже найденным адресом
         for (rs, re_) in addr_ranges:
             if not (end <= rs or start >= re_):
