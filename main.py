@@ -92,33 +92,35 @@ def _make_readonly(textbox):
 
 # Цвета
 C = {
-    "bg":         "#0d1117",   # Arctic Dark фон
-    "surface":    "#161b22",
-    "card":       "#1c2333",
-    "input":      "#161b22",
-    "border":     "#30363d",
-    "accent":     "#ff6e6e",   # яркий красно-коралловый — обработка
-    "accent_h":   "#e05555",
-    "blue":       "#58a6ff",   # яркий голубой — поиск
-    "blue_h":     "#388bfd",
-    "green":      "#56d364",   # яркий зелёный — деанонимизация
-    "green_h":    "#3fb950",
-    "cancel":     "#f85149",   # красный — отмена/очистка
-    "cancel_h":   "#da3633",
-    "purple":     "#bc8cff",   # яркий фиолетовый — экспорт
-    "purple_h":   "#a371f7",
-    "add":        "#58a6ff",   # голубой — добавить файлы
-    "add_h":      "#388bfd",
-    "text":       "#f0f6fc",
-    "text2":      "#c9d1d9",
-    "text3":      "#484f58",
-    # Маркеры по типам
-    "m_surname":  "#fbbf24",   # жёлтый
-    "m_org":      "#f97316",   # оранжевый
-    "m_city":     "#34d399",   # зелёный
+    # Фон — холодный тёмно-синий (пространство, не теснота)
+    "bg":         "#1a1b2e",
+    "surface":    "#15162a",
+    "card":       "#1e1f36",
+    "input":      "#15162a",
+    "border":     "#2a2b45",
+    # Кнопки — ghost-стиль, три уровня
+    "accent":     "#818cf8",   # индиго — primary (Поиск, Обработка)
+    "accent_h":   "#6366f1",
+    "blue":       "#818cf8",   # индиго — primary
+    "blue_h":     "#6366f1",
+    "green":      "#6ee7b7",   # мятный — secondary (Деанонимизация)
+    "green_h":    "#34d399",
+    "cancel":     "#f87171",   # красный — danger (Отмена)
+    "cancel_h":   "#ef4444",
+    "purple":     "#c4b5fd",   # лаванда — secondary (Экспорт)
+    "purple_h":   "#a78bfa",
+    "add":        "#94a3b8",   # нейтральный — secondary (Добавить, История)
+    "add_h":      "#cbd5e1",
+    "text":       "#e2e8f0",
+    "text2":      "#94a3b8",
+    "text3":      "#475569",
+    # Маркеры — tinted underline: 20% opacity фон + border
+    "m_surname":  "#f59e0b",   # тёплый оранжевый (контраст на холодном фоне)
+    "m_org":      "#fb923c",   # оранжевый
+    "m_city":     "#fbbf24",   # жёлтый
     "m_req":      "#60a5fa",   # голубой
-    "m_contact":  "#c084fc",   # сиреневый
-    "m_address":  "#fb923c",   # оранж-светлый
+    "m_contact":  "#a78bfa",   # сиреневый
+    "m_address":  "#38bdf8",   # светло-голубой
     "m_doc":      "#f87171",   # красноватый
 }
 
@@ -137,6 +139,13 @@ MARKER_COLORS = {
     "email":        C["m_contact"],
     "url":          C["m_contact"],
     "address":      C["m_address"],
+}
+
+FIELD_TYPE_MAP = {
+    "Организация": "organization", "Город": "city",
+    "ФИО подписант": "surname", "ФИО участники": "surname",
+    "Адрес": "address", "Реквизиты": "inn",
+    "Телефон/Email": "phone", "Своё поле": "address",
 }
 
 LEGEND = [
@@ -180,9 +189,21 @@ FIELD_TYPES = {
         "options_func": get_generic_replacement_options,
         "multiline": False,
     },
-    "Своё поле": {
+    "Реквизиты": {
         "hint_search": "ИНН 7707083893",
         "hint_replace": "TIN XXXXXXXXXX",
+        "options_func": get_generic_replacement_options,
+        "multiline": False,
+    },
+    "Телефон/Email": {
+        "hint_search": "+7 (495) 123-45-67",
+        "hint_replace": "+44 000 000 0000",
+        "options_func": get_generic_replacement_options,
+        "multiline": False,
+    },
+    "Своё поле": {
+        "hint_search": "любой текст",
+        "hint_replace": "замена",
         "options_func": get_generic_replacement_options,
         "multiline": False,
     },
@@ -255,9 +276,7 @@ class FieldRow:
         ctk.CTkLabel(row, text=field_type, width=100, anchor="w",
                      font=ctk.CTkFont(size=11, weight="bold"),
                      text_color=MARKER_COLORS.get(
-                         {"Организация": "organization", "Город": "city",
-                          "ФИО подписант": "surname", "ФИО участники": "surname",
-                          "Адрес": "address", "Своё поле": "address"}.get(field_type, "surname"),
+                         FIELD_TYPE_MAP.get(field_type, "surname"),
                          C["text"])).pack(side="left")
 
         if cfg["multiline"]:
@@ -719,7 +738,7 @@ class App(ctk.CTk):
 
         btn_w, btn_h = 150, 34
         self.btn_detect = ctk.CTkButton(
-            btn_row, text="ПОИСК", width=btn_w, height=btn_h,
+            btn_row, text="Поиск", width=btn_w, height=btn_h,
             fg_color=C["blue"], hover_color=C["blue_h"],
             text_color=C["bg"],
             font=ctk.CTkFont(size=12, weight="bold"),
@@ -727,7 +746,7 @@ class App(ctk.CTk):
         self.btn_detect.pack(side="left", padx=4)
 
         self.btn_process = ctk.CTkButton(
-            btn_row, text="ОБРАБОТКА", width=btn_w, height=btn_h,
+            btn_row, text="Обработка", width=btn_w, height=btn_h,
             fg_color=C["accent"], hover_color=C["accent_h"],
             text_color=C["bg"],
             font=ctk.CTkFont(size=12, weight="bold"),
@@ -735,7 +754,7 @@ class App(ctk.CTk):
         self.btn_process.pack(side="left", padx=4)
 
         self.btn_deanon = ctk.CTkButton(
-            btn_row, text="ДЕАНОНИМИЗАЦИЯ", width=btn_w, height=btn_h,
+            btn_row, text="Деанонимизация", width=btn_w, height=btn_h,
             fg_color=C["green"], hover_color=C["green_h"],
             text_color=C["bg"],
             font=ctk.CTkFont(size=12, weight="bold"),
@@ -840,9 +859,7 @@ class App(ctk.CTk):
             seen.add(key)
             count += 1
             ft = row.field_type
-            etype = {"Организация": "organization", "Город": "city",
-                     "ФИО подписант": "surname", "ФИО участники": "surname",
-                     "Адрес": "address", "Своё поле": "address"}.get(ft, "organization")
+            etype = FIELD_TYPE_MAP.get(ft, "organization")
             grp = type_to_group.get(etype, "organization")
             label = type_label.get(etype, "?")
             groups_data.setdefault(grp, []).append(
@@ -931,9 +948,7 @@ class App(ctk.CTk):
 
         # Обновляем галочки занятых замен
         for row in self.field_rows:
-            row_etype = {"Организация": "organization", "Город": "city",
-                         "ФИО подписант": "surname", "ФИО участники": "surname",
-                         "Адрес": "address", "Своё поле": "address"}.get(row.field_type, "organization")
+            row_etype = FIELD_TYPE_MAP.get(row.field_type, "organization")
             used = self._get_used_replacements(row_etype)
             row.update_used_marks(used)
 
@@ -1005,9 +1020,7 @@ class App(ctk.CTk):
     def _update_used_replacements(self):
         """Обновляет список занятых замен в панели ВЫДЕЛЕННОЕ."""
         ft = self.sel_type_var.get()
-        etype = {"Организация": "organization", "Город": "city",
-                 "ФИО подписант": "surname", "ФИО участники": "surname",
-                 "Адрес": "address", "Своё поле": "address"}.get(ft, "organization")
+        etype = FIELD_TYPE_MAP.get(ft, "organization")
 
         used = []
         for res in self._last_detect_results:
@@ -1016,9 +1029,7 @@ class App(ctk.CTk):
                     used.append(e.replacement)
         for row in self.field_rows:
             if not row.is_empty():
-                row_etype = {"Организация": "organization", "Город": "city",
-                             "ФИО подписант": "surname", "ФИО участники": "surname",
-                             "Адрес": "address", "Своё поле": "address"}.get(row.field_type, "organization")
+                row_etype = FIELD_TYPE_MAP.get(row.field_type, "organization")
                 if row_etype == etype and row.get_replace() not in used:
                     used.append(row.get_replace())
 
@@ -1356,9 +1367,7 @@ class App(ctk.CTk):
                     used.add(e.replacement)
         for row in self.field_rows:
             if not row.is_empty():
-                row_etype = {"Организация": "organization", "Город": "city",
-                             "ФИО подписант": "surname", "ФИО участники": "surname",
-                             "Адрес": "address", "Своё поле": "address"}.get(row.field_type, "organization")
+                row_etype = FIELD_TYPE_MAP.get(row.field_type, "organization")
                 if row_etype == entity_type:
                     used.add(row.get_replace())
         return used
@@ -1370,9 +1379,7 @@ class App(ctk.CTk):
             messagebox.showinfo("Выделение", "Выделите текст в предпросмотре мышкой.")
             return
         ft = self.sel_type_var.get()
-        etype = {"Организация": "organization", "Город": "city",
-                 "ФИО подписант": "surname", "ФИО участники": "surname",
-                 "Адрес": "address", "Своё поле": "address"}.get(ft, "organization")
+        etype = FIELD_TYPE_MAP.get(ft, "organization")
 
         row = self._add_field_row(ft)
         row.set_search(sel)

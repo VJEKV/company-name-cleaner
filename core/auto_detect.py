@@ -372,6 +372,10 @@ RE_INN = re.compile(r'ИНН\s*:?\s*(\d{10}(?:\d{2})?)\b')
 RE_OGRN = re.compile(r'ОГРН(?:ИП)?\s*:?\s*(\d{13,15})\b')
 RE_KPP = re.compile(r'КПП\s*:?\s*(\d{9})\b')
 RE_BIK = re.compile(r'БИК\s*:?\s*(\d{9})\b')
+RE_OKPO = re.compile(r'ОКПО\s*:?\s*(\d{8,10})\b')
+RE_OKONH = re.compile(r'ОКОНХ\s*:?\s*(\d{5,7})\b')
+RE_OKATO = re.compile(r'ОКАТО\s*:?\s*(\d{8,11})\b')
+RE_OKTMO = re.compile(r'ОКТМО\s*:?\s*(\d{8,11})\b')
 
 # Голые реквизиты без метки (для таблиц реквизитов ДС)
 # ИНН: 10 цифр (юрлицо) или 12 цифр (физлицо/ИП), не часть более длинного числа
@@ -1284,6 +1288,17 @@ def detect_requisites(text: str) -> list[DetectedEntity]:
             entity_type=ENTITY_BIK,
             replacement=_auto_replacement(ENTITY_BIK, m.group(1)),
         ))
+
+    # ОКПО, ОКОНХ, ОКАТО, ОКТМО
+    for pat, etype in ((RE_OKPO, ENTITY_KPP), (RE_OKONH, ENTITY_KPP),
+                        (RE_OKATO, ENTITY_KPP), (RE_OKTMO, ENTITY_KPP)):
+        for m in pat.finditer(text):
+            full = m.group(0)
+            entities.append(DetectedEntity(
+                start=m.start(), end=m.end(), text=full,
+                entity_type=etype,
+                replacement=_auto_replacement(etype, m.group(1)),
+            ))
 
     # Голые ИНН (10/12 цифр без метки) — ловим в контексте таблиц реквизитов
     labeled_ranges = {(e.start, e.end) for e in entities}
