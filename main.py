@@ -1079,12 +1079,23 @@ class App(ctk.CTk):
     def _add_files(self):
         paths = filedialog.askopenfilenames(
             title="Выберите файлы",
-            filetypes=[("Документы", "*.docx *.pdf *.xlsx *.xls"), ("Все", "*.*")])
+            filetypes=[("Документы", "*.docx *.doc *.pdf *.xlsx *.xls"), ("Все", "*.*")])
         added = False
+        doc_files = []
         for p in paths:
+            if Path(p).suffix.lower() == '.doc':
+                doc_files.append(Path(p).name)
+                continue
             if is_valid_file(p) and p not in self.files:
                 self.files.append(p)
                 added = True
+        if doc_files:
+            messagebox.showwarning(
+                "Формат .doc не поддерживается",
+                f"Следующие файлы в старом формате .doc:\n\n"
+                + "\n".join(f"• {n}" for n in doc_files) +
+                "\n\nОткройте их в Word и пересохраните\n"
+                "как .docx (Файл → Сохранить как → .docx)")
         if added:
             self._refresh_file_list()
             self._update_status()
