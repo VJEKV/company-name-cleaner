@@ -571,6 +571,16 @@ RE_ADDRESS_INDEX_CITY = re.compile(
     re.IGNORECASE,
 )
 
+# Регион: "Ставропольский край", "Московская область", "Республика Дагестан"
+RE_REGION = re.compile(
+    r'(?:[А-ЯЁ][а-яё]+(?:ский|ского|ской|ском|ским|ская|скую|ское)\s+'
+    r'(?:край|края|краю|краем|крае|'
+    r'област[ьи]|области|областью|'
+    r'округ[а]?|округе|округом))'
+    r'|(?:Респ(?:ублик[аиеу])?\.?\s+[А-ЯЁ][а-яё]+(?:\s+[А-ЯЁа-яё]+)?)',
+    re.IGNORECASE,
+)
+
 # Город с префиксом (ловит и склонённые формы: г.Буденновске, город Москвы)
 RE_CITY_PREFIX = re.compile(
     r'(?:г\.\s*|город[ае]?\s+|гор\.\s*)([А-ЯЁа-яё]{3,}(?:[-\s][А-ЯЁа-яё]+)?)',
@@ -644,17 +654,23 @@ def _normalize_cache_key(entity_type: str, original: str) -> str:
     text = original.strip().lower()
 
     if entity_type == ENTITY_SURNAME:
-        # Извлекаем фамилию: "шулындина владимира владимировича" → "шулындин"
-        # "в.в. шулындин" → "шулындин"
+        # Извлекаем фамилию: "афонина анатолия викторовича" → "афонин"
+        # "в.в. афонин" → "афонин", "божко владимира" → "божко"
         words = text.replace('.', '. ').split()
         for w in words:
             w = w.strip('.,;:_')
             if len(w) >= 3 and w[0].isalpha() and w.isalpha():
-                # Нормализуем окончание: шулындина → шулындин
-                for suffix in ('ого', 'его', 'ича', 'вна', 'вны', 'ину', 'ина', 'ой', 'ая'):
+                # Нормализуем окончание родительного/дательного падежа
+                # Порядок важен: длинные суффиксы первыми
+                for suffix in ('ого', 'его', 'ича', 'ича', 'вну', 'вне', 'вной', 'вны', 'ину', 'ой', 'ая', 'ую'):
                     if w.endswith(suffix) and len(w) - len(suffix) >= 3:
                         w = w[:-len(suffix)]
                         break
+                else:
+                    # Короткие суффиксы: -а, -у, -ы (Афонина→Афонин, Божку→Божк нет)
+                    # Только -а после согласной (Афонина→Афонин, но не Божко→Божк)
+                    if w.endswith('а') and len(w) >= 4 and w[-2] not in 'аеёиоуыэюя':
+                        w = w[:-1]
                 return f"{entity_type}:{w}"
         return f"{entity_type}:{text}"
 
@@ -1535,6 +1551,12 @@ def detect_addresses(text: str) -> list[DetectedEntity]:
     # Почтовый индекс отдельно
     for m in RE_INDEX.finditer(text):
         _add_addr(m.start(), m.start() + 6, m.group(1))
+
+    # Регионы: "Ставропольский край", "Московская область"
+    for m in RE_REGION.finditer(text):
+        region = m.group(0).strip()
+        if len(region) >= 5:
+            _add_addr(m.start(), m.start() + len(region), region, 0.9)
 
     return entities
 
