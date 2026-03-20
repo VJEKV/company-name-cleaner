@@ -1106,12 +1106,23 @@ class App(ctk.CTk):
         if not folder:
             return
         added = False
+        doc_files = []
         for root, dirs, fns in os.walk(folder):
             for fn in fns:
                 fp = os.path.join(root, fn)
+                if Path(fp).suffix.lower() == '.doc':
+                    doc_files.append(fn)
+                    continue
                 if is_valid_file(fp) and fp not in self.files:
                     self.files.append(fp)
                     added = True
+        if doc_files:
+            messagebox.showwarning(
+                "Формат .doc не поддерживается",
+                f"Следующие файлы в старом формате .doc:\n\n"
+                + "\n".join(f"• {n}" for n in doc_files) +
+                "\n\nОткройте их в Word и пересохраните\n"
+                "как .docx (Файл → Сохранить как → .docx)")
         if added:
             self._refresh_file_list()
             self._update_status()
