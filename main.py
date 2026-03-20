@@ -92,22 +92,26 @@ def _make_readonly(textbox):
 
 # Цвета
 C = {
-    "bg":         "#111827",
-    "surface":    "#1f2937",
-    "card":       "#374151",
-    "input":      "#1e293b",
-    "border":     "#4b5563",
-    "accent":     "#ef4444",   # красный — основное действие
-    "accent_h":   "#dc2626",
-    "blue":       "#3b82f6",   # синий — поиск/инфо
-    "blue_h":     "#2563eb",
-    "green":      "#10b981",   # зелёный — деанонимизация
-    "green_h":    "#059669",
-    "gray":       "#6b7280",   # серый — второстепенное
-    "gray_h":     "#4b5563",
-    "text":       "#f3f4f6",
-    "text2":      "#9ca3af",
-    "text3":      "#6b7280",
+    "bg":         "#0d1117",   # Arctic Dark фон
+    "surface":    "#161b22",
+    "card":       "#21262d",
+    "input":      "#161b22",
+    "border":     "#30363d",
+    "accent":     "#88c0d0",   # Nord бирюзовый — основное действие
+    "accent_h":   "#81a1c1",
+    "blue":       "#81a1c1",   # Nord синий — поиск/инфо
+    "blue_h":     "#5e81ac",
+    "green":      "#a3be8c",   # Nord зелёный
+    "green_h":    "#8fbcbb",
+    "cancel":     "#bf616a",   # Nord красный — отмена
+    "cancel_h":   "#a9444e",
+    "purple":     "#b48ead",   # Nord фиолетовый — экспорт
+    "purple_h":   "#a07da5",
+    "add":        "#5e81ac",   # Nord тёмно-синий — добавить файлы
+    "add_h":      "#81a1c1",
+    "text":       "#eceff4",
+    "text2":      "#d8dee9",
+    "text3":      "#4c566a",
     # Маркеры по типам
     "m_surname":  "#fbbf24",   # жёлтый
     "m_org":      "#f97316",   # оранжевый
@@ -273,7 +277,7 @@ class FieldRow:
 
         if on_delete:
             ctk.CTkButton(row, text="✕", width=24, height=24,
-                          fg_color=C["gray"], hover_color=C["accent"],
+                          fg_color=C["add"], hover_color=C["accent"],
                           font=ctk.CTkFont(size=10),
                           command=self._delete).pack(side="right")
 
@@ -463,15 +467,15 @@ class App(ctk.CTk):
         fb = ctk.CTkFrame(files_frame, fg_color="transparent")
         fb.pack(fill="x", padx=6, pady=(0, 6))
         ctk.CTkButton(fb, text="+ Файлы", width=70, height=24,
-                      fg_color=C["blue"], hover_color=C["blue_h"],
+                      fg_color=C["add"], hover_color=C["add_h"],
                       font=ctk.CTkFont(size=10),
                       command=self._add_files).pack(side="left", padx=(0, 2))
         ctk.CTkButton(fb, text="+ Папка", width=70, height=24,
-                      fg_color=C["blue"], hover_color=C["blue_h"],
+                      fg_color=C["add"], hover_color=C["add_h"],
                       font=ctk.CTkFont(size=10),
                       command=self._add_folder).pack(side="left", padx=(0, 2))
         ctk.CTkButton(fb, text="Очист.", width=50, height=24,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      fg_color=C["cancel"], hover_color=C["cancel_h"],
                       font=ctk.CTkFont(size=10),
                       command=self._clear_files).pack(side="right")
 
@@ -486,7 +490,7 @@ class App(ctk.CTk):
                      fg_color=C["input"], border_color=C["border"],
                      text_color=C["text"], font=ctk.CTkFont(size=10)).pack(side="left", fill="x", expand=True, padx=4)
         ctk.CTkButton(out_row, text="...", width=26, height=24,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      fg_color=C["add"], hover_color=C["add_h"],
                       command=self._browse_output).pack(side="right")
 
         # -- Замены (сводка) --
@@ -515,7 +519,7 @@ class App(ctk.CTk):
         ctk.CTkComboBox(pdf_inner, variable=self.stamp_var,
                         values=["чёрная плашка", "ромашка", "замок", "конфиденциально"],
                         width=120, fg_color=C["input"], border_color=C["border"],
-                        button_color=C["gray"], dropdown_fg_color=C["surface"],
+                        button_color=C["add"], dropdown_fg_color=C["surface"],
                         text_color=C["text"], font=ctk.CTkFont(size=9)).pack(side="left", padx=2)
 
         # -- Лог --
@@ -605,7 +609,7 @@ class App(ctk.CTk):
 
         self.btn_prev_page = ctk.CTkButton(
             page_nav, text="← Пред.", width=70, height=22,
-            fg_color=C["gray"], hover_color=C["gray_h"],
+            fg_color=C["add"], hover_color=C["add_h"],
             font=ctk.CTkFont(size=10), command=self._prev_page)
         self.btn_prev_page.pack(side="left")
 
@@ -615,7 +619,7 @@ class App(ctk.CTk):
 
         self.btn_next_page = ctk.CTkButton(
             page_nav, text="След. →", width=70, height=22,
-            fg_color=C["gray"], hover_color=C["gray_h"],
+            fg_color=C["add"], hover_color=C["add_h"],
             font=ctk.CTkFont(size=10), command=self._next_page)
         self.btn_next_page.pack(side="left")
 
@@ -695,11 +699,11 @@ class App(ctk.CTk):
             ("+ Адрес", "Адрес", C["m_address"]),
             ("+ ФИО подп.", "ФИО подписант", C["m_surname"]),
             ("+ ФИО уч.", "ФИО участники", C["m_surname"]),
-            ("+ Своё", "Своё поле", C["gray"]),
+            ("+ Своё", "Своё поле", C["add"]),
         ]
         for text, ft, color in btn_cfg:
             ctk.CTkButton(add_btns, text=text, width=50, height=22,
-                          fg_color=color, hover_color=C["gray_h"],
+                          fg_color=color, hover_color=C["add_h"],
                           text_color="#000000" if color in (C["m_surname"], C["m_city"], C["m_address"]) else C["text"],
                           font=ctk.CTkFont(size=10),
                           command=lambda n=ft: self._add_field_row(n)
@@ -736,16 +740,16 @@ class App(ctk.CTk):
         self.btn_deanon.pack(side="left", padx=4)
 
         ctk.CTkButton(btn_row, text="История", width=80, height=btn_h,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      fg_color=C["add"], hover_color=C["add_h"],
                       font=ctk.CTkFont(size=10),
                       command=self._show_history).pack(side="left", padx=4)
         ctk.CTkButton(btn_row, text="Экспорт карты", width=100, height=btn_h,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      fg_color=C["purple"], hover_color=C["purple_h"],
                       font=ctk.CTkFont(size=10),
                       command=self._show_replacement_map).pack(side="left", padx=4)
         self.btn_cancel = ctk.CTkButton(
             btn_row, text="Отмена", width=70, height=btn_h,
-            fg_color=C["gray"], hover_color=C["accent"],
+            fg_color=C["cancel"], hover_color=C["cancel_h"],
             font=ctk.CTkFont(size=10), state="disabled",
             command=self._cancel)
         self.btn_cancel.pack(side="left", padx=4)
@@ -1099,7 +1103,7 @@ class App(ctk.CTk):
         if added:
             self._refresh_file_list()
             self._update_status()
-            self._auto_detect_start()  # автопоиск при добавлении
+            # Не запускаем автопоиск — пользователь нажмёт "Поиск" сам
 
     def _add_folder(self):
         folder = filedialog.askdirectory(title="Выберите папку")
@@ -1435,6 +1439,9 @@ class App(ctk.CTk):
         self._log("Автопоиск...", "info")
         self.status_var.set("Автопоиск...")
         self.btn_detect.configure(state="disabled")
+        self.btn_cancel.configure(state="normal")
+        self.cancel_flag = False
+        self.progress.set(0)
         thread = threading.Thread(target=self._auto_detect_worker, daemon=True)
         thread.start()
 
@@ -1442,19 +1449,29 @@ class App(ctk.CTk):
         _reset_counters()
         _replacement_cache.clear()
         results = []
-        for fp in self.files:
+        n = len(self.files)
+        for i, fp in enumerate(self.files):
+            if self.cancel_flag:
+                self.after(0, lambda: self._log("Поиск отменён", "warning"))
+                break
+            fname = Path(fp).name
+            self.after(0, lambda f=fname, idx=i, tot=n: (
+                self.progress_label.configure(text=f"Поиск: {f} ({idx+1}/{tot})"),
+                self.progress.set((idx + 1) / tot)
+            ))
             r = auto_detect_in_file(fp)
             results.append(r)
-            n = len(r.get("entities", []))
-            fname = Path(fp).name
+            cnt = len(r.get("entities", []))
             if r.get("error"):
-                self.after(0, lambda m=f"X {fname}: {r['error']}": self._log(m, "error"))
+                self.after(0, lambda m=f"✗ {fname}: {r['error']}": self._log(m, "error"))
             else:
-                self.after(0, lambda m=f"  {fname}: {n} сущностей": self._log(m, "info"))
+                self.after(0, lambda m=f"  {fname}: {cnt} сущностей": self._log(m, "info"))
 
         self.after(0, lambda: self._show_preview(results))
-        self.after(0, lambda: self.status_var.set("Автопоиск завершён"))
+        self.after(0, lambda: self.status_var.set(f"Найдено сущностей: {sum(len(r.get('entities', [])) for r in results)}"))
+        self.after(0, lambda: self.progress_label.configure(text=""))
         self.after(0, lambda: self.btn_detect.configure(state="normal"))
+        self.after(0, lambda: self.btn_cancel.configure(state="disabled"))
 
     # ── Build rules ──
 
@@ -1832,7 +1849,7 @@ class App(ctk.CTk):
         ctk.CTkEntry(doc_inner, textvariable=doc_var, fg_color=C["input"],
                      border_color=C["border"], text_color=C["text"]).pack(side="left", fill="x", expand=True, padx=4)
         ctk.CTkButton(doc_inner, text="...", width=30, height=26,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      fg_color=C["add"], hover_color=C["add_h"],
                       command=lambda: doc_var.set(
                           filedialog.askopenfilename(title="Документ",
                               filetypes=[("Документы", "*.docx *.pdf *.xlsx"), ("Все", "*.*")]) or doc_var.get()
@@ -1948,7 +1965,7 @@ class App(ctk.CTk):
                 messagebox.showinfo("Экспорт", f"Сохранено: {path}")
 
         ctk.CTkButton(win, text="Экспорт CSV", width=120, height=28,
-                      fg_color=C["gray"], hover_color=C["gray_h"],
+                      fg_color=C["add"], hover_color=C["add_h"],
                       command=export_csv).pack(pady=(0, 12))
 
 
