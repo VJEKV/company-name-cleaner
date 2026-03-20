@@ -1139,8 +1139,10 @@ class App(ctk.CTk):
 
     def _clear_files(self):
         self.files.clear()
+        self._last_detect_results.clear()
         self._refresh_file_list()
         self._update_status()
+        self._clear_preview()
 
     def _browse_output(self):
         f = filedialog.askdirectory(title="Папка результатов")
