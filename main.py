@@ -66,8 +66,8 @@ from core.auto_detect import (
 )
 
 APP_TITLE = "Titan Cleaner v5.3"
-WINDOW_WIDTH = 1440
-WINDOW_HEIGHT = 860
+WINDOW_WIDTH = 1600
+WINDOW_HEIGHT = 920
 
 
 def _make_readonly(textbox):
@@ -463,13 +463,13 @@ class App(ctk.CTk):
         # ═══ ОСНОВНОЕ ТЕЛО: ТРИ КОЛОНКИ ═══
         body = ctk.CTkFrame(self, fg_color=C["bg"], corner_radius=0)
         body.pack(fill="both", expand=True)
-        body.grid_columnconfigure(0, weight=0, minsize=250)
-        body.grid_columnconfigure(1, weight=1, minsize=400)
-        body.grid_columnconfigure(2, weight=0, minsize=280)
+        body.grid_columnconfigure(0, weight=0, minsize=290)
+        body.grid_columnconfigure(1, weight=1, minsize=500)
+        body.grid_columnconfigure(2, weight=0, minsize=310)
         body.grid_rowconfigure(0, weight=1)
 
         # ═══ ЛЕВАЯ КОЛОНКА — ФАЙЛЫ, НАСТРОЙКИ, ЛОГ ═══
-        left = ctk.CTkScrollableFrame(body, width=240, fg_color=C["bg"], corner_radius=0)
+        left = ctk.CTkScrollableFrame(body, width=280, fg_color=C["surface"], corner_radius=0)
         left.grid(row=0, column=0, sticky="nsew")
 
         # -- Файлы --
@@ -477,7 +477,7 @@ class App(ctk.CTk):
         files_frame = ctk.CTkFrame(left, fg_color=C["surface"], corner_radius=6)
         files_frame.pack(fill="x", padx=6, pady=(0, 4))
 
-        self.file_list = ctk.CTkTextbox(files_frame, height=70, corner_radius=4,
+        self.file_list = ctk.CTkTextbox(files_frame, height=100, corner_radius=4,
                                          fg_color=C["input"], text_color=C["text"],
                                          font=ctk.CTkFont(size=10))
         self.file_list.pack(fill="x", padx=6, pady=(6, 2))
@@ -543,7 +543,7 @@ class App(ctk.CTk):
 
         # -- Лог --
         self._section(left, "ЛОГ")
-        self.log_text = ctk.CTkTextbox(left, height=100, corner_radius=4,
+        self.log_text = ctk.CTkTextbox(left, height=150, corner_radius=4,
                                         fg_color=C["input"], text_color=C["text"],
                                         font=ctk.CTkFont(family="Consolas", size=11))
         self.log_text.pack(fill="x", padx=6, pady=(0, 4))
@@ -668,7 +668,7 @@ class App(ctk.CTk):
         _make_readonly(self.preview_text)
 
         # ═══ ПРАВАЯ КОЛОНКА — ВЫДЕЛЕННОЕ + ПРАВИЛА ЗАМЕНЫ ═══
-        right = ctk.CTkScrollableFrame(body, width=270, fg_color=C["bg"], corner_radius=0)
+        right = ctk.CTkScrollableFrame(body, width=300, fg_color=C["surface"], corner_radius=0)
         right.grid(row=0, column=2, sticky="nsew")
 
         # -- Выделенное (ручное добавление) --
@@ -1640,7 +1640,10 @@ class App(ctk.CTk):
             if os.path.abspath(fp) == os.path.abspath(out):
                 out = str(Path(output_dir) / f"{Path(fp).stem}_cleaned{ext}")
 
-            self.after(0, lambda f=fn: self.progress_label.configure(text=f))
+            self.after(0, lambda f=fn, idx=i, tot=n: (
+                self.progress_label.configure(text=f"Обработка: {f} ({idx+1}/{tot})"),
+                self.progress.set((idx + 1) / tot)
+            ))
 
             # Объединяем правила: ручные + авто-entities для этого файла
             combined_rules = list(manual_rules)  # копия ручных правил
@@ -1741,6 +1744,7 @@ class App(ctk.CTk):
         self.processing = False
         self.after(0, lambda: self.btn_process.configure(state="normal"))
         self.after(0, lambda: self.btn_cancel.configure(state="disabled"))
+        self.after(0, lambda: self.progress_label.configure(text=""))
 
     # ── Deanonymization panel ──
 
