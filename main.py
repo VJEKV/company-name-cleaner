@@ -94,24 +94,24 @@ def _make_readonly(textbox):
 C = {
     "bg":         "#0d1117",   # Arctic Dark фон
     "surface":    "#161b22",
-    "card":       "#21262d",
+    "card":       "#1c2333",
     "input":      "#161b22",
     "border":     "#30363d",
-    "accent":     "#88c0d0",   # Nord бирюзовый — основное действие
-    "accent_h":   "#81a1c1",
-    "blue":       "#81a1c1",   # Nord синий — поиск/инфо
-    "blue_h":     "#5e81ac",
-    "green":      "#a3be8c",   # Nord зелёный
-    "green_h":    "#8fbcbb",
-    "cancel":     "#bf616a",   # Nord красный — отмена
-    "cancel_h":   "#a9444e",
-    "purple":     "#b48ead",   # Nord фиолетовый — экспорт
-    "purple_h":   "#a07da5",
-    "add":        "#5e81ac",   # Nord тёмно-синий — добавить файлы
-    "add_h":      "#81a1c1",
-    "text":       "#eceff4",
-    "text2":      "#d8dee9",
-    "text3":      "#4c566a",
+    "accent":     "#ff6e6e",   # яркий красно-коралловый — обработка
+    "accent_h":   "#e05555",
+    "blue":       "#58a6ff",   # яркий голубой — поиск
+    "blue_h":     "#388bfd",
+    "green":      "#56d364",   # яркий зелёный — деанонимизация
+    "green_h":    "#3fb950",
+    "cancel":     "#f85149",   # красный — отмена/очистка
+    "cancel_h":   "#da3633",
+    "purple":     "#bc8cff",   # яркий фиолетовый — экспорт
+    "purple_h":   "#a371f7",
+    "add":        "#58a6ff",   # голубой — добавить файлы
+    "add_h":      "#388bfd",
+    "text":       "#f0f6fc",
+    "text2":      "#c9d1d9",
+    "text3":      "#484f58",
     # Маркеры по типам
     "m_surname":  "#fbbf24",   # жёлтый
     "m_org":      "#f97316",   # оранжевый
@@ -721,6 +721,7 @@ class App(ctk.CTk):
         self.btn_detect = ctk.CTkButton(
             btn_row, text="ПОИСК", width=btn_w, height=btn_h,
             fg_color=C["blue"], hover_color=C["blue_h"],
+            text_color=C["bg"],
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._auto_detect_start)
         self.btn_detect.pack(side="left", padx=4)
@@ -728,6 +729,7 @@ class App(ctk.CTk):
         self.btn_process = ctk.CTkButton(
             btn_row, text="ОБРАБОТКА", width=btn_w, height=btn_h,
             fg_color=C["accent"], hover_color=C["accent_h"],
+            text_color=C["bg"],
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._start_processing)
         self.btn_process.pack(side="left", padx=4)
@@ -735,6 +737,7 @@ class App(ctk.CTk):
         self.btn_deanon = ctk.CTkButton(
             btn_row, text="ДЕАНОНИМИЗАЦИЯ", width=btn_w, height=btn_h,
             fg_color=C["green"], hover_color=C["green_h"],
+            text_color=C["bg"],
             font=ctk.CTkFont(size=12, weight="bold"),
             command=self._deanon_panel)
         self.btn_deanon.pack(side="left", padx=4)
@@ -1130,7 +1133,6 @@ class App(ctk.CTk):
         if added:
             self._refresh_file_list()
             self._update_status()
-            self._auto_detect_start()
 
     def _refresh_file_list(self):
         self.file_list.delete("1.0", "end")
