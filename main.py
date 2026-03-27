@@ -589,6 +589,7 @@ class App(ctk.CTk):
             ("surname",      "ФИО",         C["m_surname"]),
             ("city",         "Города",      C["m_city"]),
             ("address",      "Адреса",      C["m_address"]),
+            ("unit",         "Установки",   C["m_unit"]),
             ("req",          "Реквизиты",   C["m_req"]),
             ("contact",      "Контакты",    C["m_contact"]),
             ("doc",          "Документы",    C["m_doc"]),
