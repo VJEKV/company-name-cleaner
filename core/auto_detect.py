@@ -754,6 +754,7 @@ def _auto_replacement(entity_type: str, original: str) -> str:
     global _inn_counter, _ogrn_counter, _kpp_counter, _bik_counter
     global _account_counter, _snils_counter, _passport_counter
     global _phone_counter, _email_counter, _url_counter
+    global _unit_counter, _unit_cache
 
     key = _normalize_cache_key(entity_type, original)
     if key in _replacement_cache:
