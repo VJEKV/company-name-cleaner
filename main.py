@@ -48,6 +48,7 @@ from core.replacements import (
     get_surname_replacement_options,
     get_city_replacement_options,
     get_signatory_replacement_options,
+    get_unit_replacement_options,
     get_generic_replacement_options,
     ReplacementMapper,
 )
@@ -195,8 +196,8 @@ FIELD_TYPES = {
     },
     "Установка": {
         "hint_search": "ЛЧ-24-2000",
-        "hint_replace": "Unit-HT-24",
-        "options_func": get_generic_replacement_options,
+        "hint_replace": "Unit-HT-001",
+        "options_func": get_unit_replacement_options,
         "multiline": False,
     },
     "Реквизиты": {
@@ -1426,48 +1427,54 @@ class App(ctk.CTk):
         # Определяем entity_type для маркера
         etype = FIELD_TYPE_MAP.get(ft, "organization")
 
-        # Добавляем как entity в авто-результаты текущего файла и подсвечиваем
+        # Добавляем как entity во ВСЕ файлы (ищем все вхождения)
+        import re as _re
+        from core.auto_detect import DetectedEntity, _auto_replacement
+        repl = _auto_replacement(etype, sel)
+        added_count = 0
+        for r in self._last_detect_results:
+            full_text = r.get("text", "")
+            if not full_text:
+                continue
+            for m in _re.finditer(_re.escape(sel), full_text, _re.IGNORECASE):
+                already = any(
+                    e.start == m.start() and e.end == m.end()
+                    for e in r.get("entities", [])
+                )
+                if not already:
+                    new_e = DetectedEntity(
+                        start=m.start(), end=m.end(),
+                        text=m.group(), entity_type=etype,
+                        replacement=repl,
+                        confidence=1.0,
+                    )
+                    r.setdefault("entities", []).append(new_e)
+                    added_count += 1
+
+        # Запоминаем позицию скролла
+        try:
+            scroll_pos = self.preview_text._textbox.yview()
+        except Exception:
+            scroll_pos = None
+
+        # Перерисовываем превью текущего файла
         fname = self.preview_file_var.get()
         for r in self._last_detect_results:
             if Path(r["filepath"]).name == fname:
-                full_text = r.get("text", "")
-                # Находим все вхождения в тексте
-                import re as _re
-                for m in _re.finditer(_re.escape(sel), full_text, _re.IGNORECASE):
-                    # Проверяем нет ли уже такой entity
-                    already = any(
-                        e.start == m.start() and e.end == m.end()
-                        for e in r.get("entities", [])
-                    )
-                    if not already:
-                        from core.auto_detect import DetectedEntity, _auto_replacement
-                        new_e = DetectedEntity(
-                            start=m.start(), end=m.end(),
-                            text=m.group(), entity_type=etype,
-                            replacement=_auto_replacement(etype, m.group()),
-                            confidence=1.0,
-                        )
-                        r.setdefault("entities", []).append(new_e)
-
-                # Запоминаем позицию скролла
-                try:
-                    scroll_pos = self.preview_text._textbox.yview()
-                except Exception:
-                    scroll_pos = None
-
-                # Перерисовываем превью с новыми маркерами
                 self._render_file_preview(r)
-
-                # Восстанавливаем позицию скролла
-                if scroll_pos:
-                    self.after(10, lambda sp=scroll_pos: self.preview_text._textbox.yview_moveto(sp[0]))
-
-                # Обновляем сводку и карту замен
-                total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
-                self.found_label.configure(text=f"Найдено: {total}")
-                self._update_map_panel()
-                self._update_used_replacements()
                 break
+
+        # Восстанавливаем позицию скролла
+        if scroll_pos:
+            self.after(10, lambda sp=scroll_pos: self.preview_text._textbox.yview_moveto(sp[0]))
+
+        # Обновляем сводку и карту замен
+        total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
+        self.found_label.configure(text=f"Найдено: {total}")
+        self._update_map_panel()
+        self._update_used_replacements()
+        if added_count > 1:
+            self._log(f"  Найдено {added_count} вхождений «{sel[:30]}»", "info")
 
         self._ask_add_inclusion(sel, etype)
 

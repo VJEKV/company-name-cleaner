@@ -83,6 +83,31 @@ SIGNATORY_REPLACEMENTS = {
     ],
 }
 
+UNIT_REPLACEMENTS = {
+    "Англоязычные": [
+        'Unit-HT-001',
+        'Unit-CR-002',
+        'Unit-FCC-003',
+        'Unit-CDU-004',
+        'Unit-GFS-005',
+        'Unit-DCU-006',
+        'Unit-ISO-007',
+        'Unit-ALK-008',
+        'Unit-VB-009',
+        'Unit-HC-010',
+    ],
+    "Нейтральные": [
+        'Установка №{n}',
+        'Технол. установка №{n}',
+        'Блок №{n}',
+    ],
+    "Очевидные заглушки": [
+        '[УСТАНОВКА]',
+        '███████',
+        'ХХХХХХ',
+    ],
+}
+
 GENERIC_REPLACEMENTS = {
     "Очевидные заглушки": [
         '[ЗАГЛУШКА]',
@@ -108,6 +133,10 @@ def get_city_replacement_options() -> dict[str, list[str]]:
 
 def get_signatory_replacement_options() -> dict[str, list[str]]:
     return SIGNATORY_REPLACEMENTS
+
+
+def get_unit_replacement_options() -> dict[str, list[str]]:
+    return UNIT_REPLACEMENTS
 
 
 def get_generic_replacement_options() -> dict[str, list[str]]:
