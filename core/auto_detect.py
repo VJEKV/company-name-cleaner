@@ -377,6 +377,21 @@ RE_OKONH = re.compile(r'ОКОНХ\s*:?\s*(\d{5,7})\b')
 RE_OKATO = re.compile(r'ОКАТО\s*:?\s*(\d{8,11})\b')
 RE_OKTMO = re.compile(r'ОКТМО\s*:?\s*(\d{8,11})\b')
 
+# Шифры установок НПЗ: ЛЧ-24-2000, ЭЛОУ-АВТ-6, Л-35-11/300, Г-43-107М, ГФУ, УЗК и т.д.
+RE_REFINERY_UNIT = re.compile(
+    r'(?:ЭЛОУ[-\s]*АВТ[-\s]*\d+|'                              # ЭЛОУ-АВТ-6
+    r'ЛЧ[-\s]*\d{1,2}[-\s]*/?\d{2,4}|'                         # ЛЧ-24-2000, ЛЧ-35-11/1000
+    r'ЛГ[-\s]*\d{1,2}[-\s]*/?\d{2,4}(?:[-/]\d+)?|'             # ЛГ-35-11/300-95
+    r'Л[-\s]*\d{1,2}[-\s]*/?\d{2,4}(?:[-/]\d+)?|'              # Л-24-7, Л-35-11/300
+    r'Г[-\s]*\d{1,2}[-\s]*/?\d{2,4}[А-Яа-яМ]*|'               # Г-43-107М
+    r'КТ[-\s]*\d+(?:/\d+)?|'                                    # КТ-1, КТ-1/1
+    r'ЛК[-\s]*\d+[а-яу]*|'                                      # ЛК-6у
+    r'ЭП[-\s]*\d{2,3}|'                                         # ЭП-300
+    r'(?:ЭЛОУ|АВТ|АГФУ|ЦГФУ|ГФУ|УЗК|МТБЭ|ТАМЭ)(?=[\s,.\-)])' # аббревиатуры установок
+    r')',
+    re.IGNORECASE,
+)
+
 # Голые реквизиты без метки (для таблиц реквизитов ДС)
 # ИНН: 10 цифр (юрлицо) или 12 цифр (физлицо/ИП), не часть более длинного числа
 RE_INN_BARE = re.compile(r'(?<!\d)(\d{10}|\d{12})(?!\d)')
@@ -627,6 +642,7 @@ def _reset_counters():
     global _inn_counter, _ogrn_counter, _kpp_counter, _bik_counter
     global _account_counter, _snils_counter, _passport_counter
     global _phone_counter, _email_counter, _url_counter, _pseudo_gen
+    global _unit_counter, _unit_cache
     _surname_counter = 0
     _org_counter = 0
     _city_counter = 0
@@ -641,6 +657,8 @@ def _reset_counters():
     _phone_counter = 0
     _email_counter = 0
     _url_counter = 0
+    _unit_counter = 0
+    _unit_cache = {}
     _pseudo_gen = EnglishPseudonymGenerator()
 
 
@@ -1150,6 +1168,34 @@ def detect_organizations(text: str) -> list[DetectedEntity]:
     return entities
 
 
+# Счётчик для генерации уникальных шифров установок
+_unit_counter = 0
+_unit_cache: dict[str, str] = {}
+
+_UNIT_PREFIXES = ["HT", "CR", "FCC", "CDU", "GFS", "DCU", "CU", "ISO", "ALK", "PY", "VB", "HC"]
+
+
+def detect_refinery_units(text: str) -> list[DetectedEntity]:
+    """Детектирует шифры установок НПЗ (ЛЧ-24-2000, ЭЛОУ-АВТ-6 и т.д.)."""
+    global _unit_counter
+    entities = []
+    for m in RE_REFINERY_UNIT.finditer(text):
+        unit_text = m.group(0).strip()
+        if len(unit_text) < 2:
+            continue
+        key = unit_text.upper()
+        if key not in _unit_cache:
+            _unit_counter += 1
+            prefix = _UNIT_PREFIXES[(_unit_counter - 1) % len(_UNIT_PREFIXES)]
+            _unit_cache[key] = f"Unit-{prefix}-{_unit_counter:03d}"
+        entities.append(DetectedEntity(
+            start=m.start(), end=m.end(), text=unit_text,
+            entity_type=ENTITY_ORGANIZATION,
+            replacement=_unit_cache[key],
+        ))
+    return entities
+
+
 def _find_city_by_form(word: str) -> str | None:
     """Находит город по любой падежной форме (включая ё/е нормализацию)."""
     # Прямое совпадение
@@ -1589,6 +1635,7 @@ def _detect_all_in_text(text: str) -> list[DetectedEntity]:
     all_entities.extend(detect_full_names(text))
     all_entities.extend(detect_surname_initials(text))
     all_entities.extend(detect_organizations(text))
+    all_entities.extend(detect_refinery_units(text))
     all_entities.extend(detect_requisites(text))
     all_entities.extend(detect_personal_ids(text))
     all_entities.extend(detect_contacts(text))

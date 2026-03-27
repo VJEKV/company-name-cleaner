@@ -114,14 +114,14 @@ C = {
     "text":       "#e2e8f0",
     "text2":      "#94a3b8",
     "text3":      "#475569",
-    # Маркеры — tinted underline: 20% opacity фон + border
-    "m_surname":  "#f59e0b",   # тёплый оранжевый (контраст на холодном фоне)
-    "m_org":      "#fb923c",   # оранжевый
-    "m_city":     "#fbbf24",   # жёлтый
-    "m_req":      "#60a5fa",   # голубой
-    "m_contact":  "#a78bfa",   # сиреневый
-    "m_address":  "#38bdf8",   # светло-голубой
-    "m_doc":      "#f87171",   # красноватый
+    # Маркеры — все максимально различимые на тёмно-синем фоне
+    "m_surname":  "#fbbf24",   # янтарный — ФИО
+    "m_org":      "#f97316",   # коралловый — Организации
+    "m_city":     "#34d399",   # изумрудный — Города
+    "m_address":  "#22d3ee",   # бирюзовый — Адреса/Регионы
+    "m_req":      "#818cf8",   # индиго — Реквизиты (ИНН/КПП/БИК/ОКПО)
+    "m_contact":  "#f472b6",   # розовый — Контакты (тел/email/url)
+    "m_doc":      "#f87171",   # красный — Документы (СНИЛС/паспорт)
 }
 
 MARKER_COLORS = {
@@ -144,8 +144,9 @@ MARKER_COLORS = {
 FIELD_TYPE_MAP = {
     "Организация": "organization", "Город": "city",
     "ФИО подписант": "surname", "ФИО участники": "surname",
-    "Адрес": "address", "Реквизиты": "inn",
-    "Телефон/Email": "phone", "Своё поле": "address",
+    "Адрес": "address", "Установка": "organization",
+    "Реквизиты": "inn", "Телефон/Email": "phone",
+    "Своё поле": "address",
 }
 
 LEGEND = [
@@ -186,6 +187,12 @@ FIELD_TYPES = {
     "Адрес": {
         "hint_search": "ул. Ленина, д.5",
         "hint_replace": "123 Baker Street",
+        "options_func": get_generic_replacement_options,
+        "multiline": False,
+    },
+    "Установка": {
+        "hint_search": "ЛЧ-24-2000",
+        "hint_replace": "Unit-HT-24",
         "options_func": get_generic_replacement_options,
         "multiline": False,
     },
