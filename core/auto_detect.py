@@ -35,6 +35,7 @@ ENTITY_PHONE = "phone"
 ENTITY_EMAIL = "email"
 ENTITY_URL = "url"
 ENTITY_ADDRESS = "address"
+ENTITY_UNIT = "unit"
 
 
 @dataclass
@@ -387,7 +388,9 @@ RE_REFINERY_UNIT = re.compile(
     r'КТ[-\s]*\d+(?:/\d+)?|'                                    # КТ-1, КТ-1/1
     r'ЛК[-\s]*\d+[а-яу]*|'                                      # ЛК-6у
     r'ЭП[-\s]*\d{2,3}|'                                         # ЭП-300
-    r'(?:ЭЛОУ|АВТ|АГФУ|ЦГФУ|ГФУ|УЗК|МТБЭ|ТАМЭ)(?=[\s,.\-)])' # аббревиатуры установок
+    r'УКК[-\s]*\d*|'                                             # УКК, УКК-1
+    r'\d{2}[-\s]*\d{2,3}(?:/\d+[А-Яа-я]*)?|'                    # 43-102, 43-103, 21-10/3М, 25-6
+    r'(?:ЭЛОУ|АВТ|АГФУ|ЦГФУ|ГФУ|УЗК|МТБЭ|ТАМЭ|УКК)(?=[\s,.\-)])' # аббревиатуры установок
     r')',
     re.IGNORECASE,
 )
@@ -791,6 +794,11 @@ def _auto_replacement(entity_type: str, original: str) -> str:
         street = streets[(_addr_counter - 1) % len(streets)]
         repl = f"{_addr_counter} {street}"
 
+    elif entity_type == ENTITY_UNIT:
+        _unit_counter += 1
+        prefix = _UNIT_PREFIXES[(_unit_counter - 1) % len(_UNIT_PREFIXES)]
+        repl = f"Unit-{prefix}-{_unit_counter:03d}"
+
     else:
         repl = "[REDACTED]"
 
@@ -1190,7 +1198,7 @@ def detect_refinery_units(text: str) -> list[DetectedEntity]:
             _unit_cache[key] = f"Unit-{prefix}-{_unit_counter:03d}"
         entities.append(DetectedEntity(
             start=m.start(), end=m.end(), text=unit_text,
-            entity_type=ENTITY_ORGANIZATION,
+            entity_type=ENTITY_UNIT,
             replacement=_unit_cache[key],
         ))
     return entities
@@ -2081,6 +2089,7 @@ ENTITY_TYPE_NAMES = {
     ENTITY_EMAIL: "Email",
     ENTITY_URL: "Интернет-адреса",
     ENTITY_ADDRESS: "Адреса",
+    ENTITY_UNIT: "Установки",
 }
 
 

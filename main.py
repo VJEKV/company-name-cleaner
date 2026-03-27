@@ -122,6 +122,7 @@ C = {
     "m_req":      "#818cf8",   # индиго — Реквизиты (ИНН/КПП/БИК/ОКПО)
     "m_contact":  "#f472b6",   # розовый — Контакты (тел/email/url)
     "m_doc":      "#f87171",   # красный — Документы (СНИЛС/паспорт)
+    "m_unit":     "#a3e635",   # лайм — Установки НПЗ
 }
 
 MARKER_COLORS = {
@@ -139,12 +140,13 @@ MARKER_COLORS = {
     "email":        C["m_contact"],
     "url":          C["m_contact"],
     "address":      C["m_address"],
+    "unit":         C["m_unit"],
 }
 
 FIELD_TYPE_MAP = {
     "Организация": "organization", "Город": "city",
     "ФИО подписант": "surname", "ФИО участники": "surname",
-    "Адрес": "address", "Установка": "organization",
+    "Адрес": "address", "Установка": "unit",
     "Реквизиты": "inn", "Телефон/Email": "phone",
     "Своё поле": "address",
 }
@@ -157,6 +159,7 @@ LEGEND = [
     ("Рекв", C["m_req"]),
     ("Конт", C["m_contact"]),
     ("Док", C["m_doc"]),
+    ("Уст", C["m_unit"]),
 ]
 
 FIELD_TYPES = {
