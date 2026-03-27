@@ -457,7 +457,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(top, text="TITAN CLEANER",
                      font=ctk.CTkFont(size=16, weight="bold"),
                      text_color=C["accent"]).pack(side="left", padx=12)
-        ctk.CTkLabel(top, text="v4.3",
+        ctk.CTkLabel(top, text="v5.3",
                      font=ctk.CTkFont(size=11),
                      text_color=C["text3"]).pack(side="left")
 
@@ -549,7 +549,7 @@ class App(ctk.CTk):
                         values=["чёрная плашка", "ромашка", "замок", "конфиденциально"],
                         width=120, fg_color=C["input"], border_color=C["border"],
                         button_color=C["add"], dropdown_fg_color=C["surface"],
-                        text_color=C["text"], font=ctk.CTkFont(size=9)).pack(side="left", padx=2)
+                        text_color=C["text"], font=ctk.CTkFont(size=11)).pack(side="left", padx=2)
 
         # -- Лог --
         self._section(left, "ЛОГ")
@@ -599,7 +599,7 @@ class App(ctk.CTk):
                                             fg_color=C["border"], height=6)
         self.progress.pack(fill="x", padx=6, pady=(4, 2))
         self.progress.set(0)
-        self.progress_label = ctk.CTkLabel(left, text="", font=ctk.CTkFont(size=9),
+        self.progress_label = ctk.CTkLabel(left, text="", font=ctk.CTkFont(size=11),
                                             text_color=C["text3"])
         self.progress_label.pack(anchor="w", padx=6)
 
@@ -688,8 +688,8 @@ class App(ctk.CTk):
 
         self.sel_text_label = ctk.CTkLabel(
             sel_frame, text="Выделите текст в превью",
-            font=ctk.CTkFont(size=10), text_color=C["text3"],
-            wraplength=250, justify="left")
+            font=ctk.CTkFont(size=12), text_color=C["text2"],
+            wraplength=280, justify="left")
         self.sel_text_label.pack(padx=6, pady=(4, 2), anchor="w")
 
         sel_row = ctk.CTkFrame(sel_frame, fg_color="transparent")
@@ -697,21 +697,21 @@ class App(ctk.CTk):
 
         self.sel_type_var = ctk.StringVar(value="Организация")
         ctk.CTkComboBox(sel_row, variable=self.sel_type_var,
-                        values=list(FIELD_TYPES.keys()), width=120,
+                        values=list(FIELD_TYPES.keys()), width=140,
                         fg_color=C["input"], border_color=C["border"],
                         button_color=C["blue"], dropdown_fg_color=C["surface"],
-                        text_color=C["text"], font=ctk.CTkFont(size=10)
+                        text_color=C["text"], font=ctk.CTkFont(size=12)
                         ).pack(side="left", padx=(0, 4))
 
-        ctk.CTkButton(sel_row, text="Добавить", width=70, height=24,
+        ctk.CTkButton(sel_row, text="Добавить", width=80, height=28,
                       fg_color=C["blue"], hover_color=C["blue_h"],
-                      font=ctk.CTkFont(size=10),
+                      font=ctk.CTkFont(size=12),
                       command=self._add_selected_text).pack(side="left")
 
         # -- Занятые замены (контекст маппинга) --
         self.sel_used_label = ctk.CTkLabel(
-            sel_frame, text="", font=ctk.CTkFont(size=9),
-            text_color=C["text3"], wraplength=250, justify="left")
+            sel_frame, text="", font=ctk.CTkFont(size=11),
+            text_color=C["text2"], wraplength=280, justify="left")
         self.sel_used_label.pack(padx=6, pady=(0, 4), anchor="w")
 
         # -- Правила замены --
