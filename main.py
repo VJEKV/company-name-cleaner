@@ -1464,29 +1464,34 @@ class App(ctk.CTk):
         from core.auto_detect import DetectedEntity, _auto_replacement
         repl = _auto_replacement(etype, sel)
         added_count = 0
+        # Нормализуем выделенный текст (убираем лишние пробелы/переносы)
+        sel_clean = ' '.join(sel.split())
         for r in self._last_detect_results:
             full_text = r.get("text", "")
             if not full_text:
-                # Для PDF собрать из pages
                 full_text = ''.join(str(v) for v in r.get("pages", {}).values())
                 if full_text:
                     r["text"] = full_text
             if not full_text:
+                self._log(f"  ! {Path(r['filepath']).name}: нет текста", "warning")
                 continue
-            for m in _re.finditer(_re.escape(sel), full_text, _re.IGNORECASE):
-                already = any(
-                    e.start == m.start() and e.end == m.end()
-                    for e in r.get("entities", [])
-                )
-                if not already:
-                    new_e = DetectedEntity(
-                        start=m.start(), end=m.end(),
-                        text=m.group(), entity_type=etype,
-                        replacement=repl,
-                        confidence=1.0,
+            # Ищем и точное совпадение, и нормализованное
+            for search_text in (sel, sel_clean):
+                pattern = _re.escape(search_text)
+                for m in _re.finditer(pattern, full_text, _re.IGNORECASE):
+                    already = any(
+                        e.start == m.start() and e.end == m.end()
+                        for e in r.get("entities", [])
                     )
-                    r.setdefault("entities", []).append(new_e)
-                    added_count += 1
+                    if not already:
+                        new_e = DetectedEntity(
+                            start=m.start(), end=m.end(),
+                            text=m.group(), entity_type=etype,
+                            replacement=repl,
+                            confidence=1.0,
+                        )
+                        r.setdefault("entities", []).append(new_e)
+                        added_count += 1
 
         # Запоминаем позицию скролла
         try:
@@ -1512,6 +1517,8 @@ class App(ctk.CTk):
         self._update_used_replacements()
         if added_count > 0:
             self._log(f"  «{sel[:30]}»: {added_count} вхождений", "info")
+        else:
+            self._log(f"  «{sel[:30]}»: добавлено как правило (вхождения не найдены в тексте)", "warning")
 
         self._ask_add_inclusion(sel, etype)
 
