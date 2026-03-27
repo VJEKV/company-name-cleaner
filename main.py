@@ -993,9 +993,17 @@ class App(ctk.CTk):
         # Предлагаем добавить в исключения
         if source == "авто":
             self._ask_add_exclusion(entity_text)
+        # Запоминаем позицию скролла
+        try:
+            scroll_pos = self.preview_text._textbox.yview()
+        except Exception:
+            scroll_pos = None
         # Перерисовываем превью и карту
         self._render_all_pages()
         self._update_map_panel()
+        # Восстанавливаем позицию
+        if scroll_pos:
+            self.after(10, lambda sp=scroll_pos: self.preview_text._textbox.yview_moveto(sp[0]))
 
     def _ask_add_exclusion(self, word: str):
         if messagebox.askyesno("Исключение",
@@ -1416,15 +1424,7 @@ class App(ctk.CTk):
         self._pending_selection = None
 
         # Определяем entity_type для маркера
-        type_map = {
-            "Организация": "organization",
-            "Город": "city",
-            "Адрес": "address",
-            "ФИО подписант": "surname",
-            "ФИО участники": "surname",
-            "Своё поле": "address",
-        }
-        etype = type_map.get(ft, "organization")
+        etype = FIELD_TYPE_MAP.get(ft, "organization")
 
         # Добавляем как entity в авто-результаты текущего файла и подсвечиваем
         fname = self.preview_file_var.get()
@@ -1449,8 +1449,18 @@ class App(ctk.CTk):
                         )
                         r.setdefault("entities", []).append(new_e)
 
+                # Запоминаем позицию скролла
+                try:
+                    scroll_pos = self.preview_text._textbox.yview()
+                except Exception:
+                    scroll_pos = None
+
                 # Перерисовываем превью с новыми маркерами
                 self._render_file_preview(r)
+
+                # Восстанавливаем позицию скролла
+                if scroll_pos:
+                    self.after(10, lambda sp=scroll_pos: self.preview_text._textbox.yview_moveto(sp[0]))
 
                 # Обновляем сводку и карту замен
                 total = sum(len(res.get("entities", [])) for res in self._last_detect_results)
