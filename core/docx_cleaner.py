@@ -32,6 +32,30 @@ def _get_replacement_text(rule: dict, matched_text: str) -> str:
     return rule.get("replacement", "[ЗАГЛУШКА]")
 
 
+def _replace_in_xml_runs(runs, start, end, replacement, ns):
+    """Заменяет текст в XML runs сноски по позициям start:end."""
+    pos = 0
+    replaced = False
+    for r_el in runs:
+        for t_el in r_el.findall('w:t', ns):
+            if t_el.text is None:
+                continue
+            t_start = pos
+            t_end = pos + len(t_el.text)
+            if t_start <= start < t_end and not replaced:
+                # Начало замены в этом run
+                before = t_el.text[:start - t_start]
+                after_pos = min(end - t_start, len(t_el.text))
+                after = t_el.text[after_pos:]
+                t_el.text = before + replacement + after
+                replaced = True
+            elif replaced and t_start < end:
+                # Продолжение замены — очищаем
+                cut_end = min(end - t_start, len(t_el.text))
+                t_el.text = t_el.text[cut_end:]
+            pos = t_end
+
+
 def clean_docx(
     filepath: str,
     output_path: str,
@@ -69,7 +93,37 @@ def clean_docx(
                 for paragraph in cell.paragraphs:
                     stats = _process_paragraph(paragraph, replacement_rules, stats)
 
-    # 3. Колонтитулы
+    # 3. Сноски (footnotes и endnotes)
+    for note_part_attr in ('footnotes_part', 'endnotes_part'):
+        try:
+            note_part = getattr(doc.part, note_part_attr, None)
+            if note_part is None:
+                continue
+            from lxml import etree
+            ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+            for note_el in note_part.element.findall('.//w:footnote', ns) + note_part.element.findall('.//w:endnote', ns):
+                for p_el in note_el.findall('.//w:p', ns):
+                    text_parts = []
+                    for r_el in p_el.findall('.//w:r', ns):
+                        for t_el in r_el.findall('w:t', ns):
+                            if t_el.text:
+                                text_parts.append(t_el.text)
+                    full_text = ''.join(text_parts)
+                    if not full_text.strip():
+                        continue
+                    for rule in replacement_rules:
+                        for pattern in rule.get("patterns", []):
+                            for match in pattern.finditer(full_text):
+                                replacement = _get_replacement_text(rule, match.group())
+                                # Заменяем в XML напрямую
+                                runs = p_el.findall('.//w:r', ns)
+                                _replace_in_xml_runs(runs, match.start(), match.end(), replacement, ns)
+                                rule_type = rule.get("type", "custom")
+                                stats[rule_type] = stats.get(rule_type, 0) + 1
+        except Exception:
+            pass
+
+    # 4. Колонтитулы
     for section in doc.sections:
         for header in [section.header, section.first_page_header,
                        section.even_page_header]:

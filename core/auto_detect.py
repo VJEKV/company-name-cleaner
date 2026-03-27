@@ -1892,6 +1892,22 @@ def _detect_in_docx(filepath: str) -> dict:
                 for p in cell.paragraphs:
                     page_paragraphs[-1].append(p.text)
 
+    # Сноски (footnotes и endnotes)
+    for note_part_attr in ('footnotes_part', 'endnotes_part'):
+        try:
+            note_part = getattr(doc.part, note_part_attr, None)
+            if note_part is None:
+                continue
+            from lxml import etree
+            ns = {'w': 'http://schemas.openxmlformats.org/wordprocessingml/2006/main'}
+            for note_el in note_part.element.findall('.//w:footnote', ns) + note_part.element.findall('.//w:endnote', ns):
+                for p_el in note_el.findall('.//w:p', ns):
+                    text = ''.join(t.text for t in p_el.findall('.//w:t', ns) if t.text)
+                    if text.strip():
+                        page_paragraphs[-1].append(text)
+        except Exception:
+            pass
+
     # Если разрывов не было — пытаемся разбить по ~3000 символов (примерно страница)
     if len(page_paragraphs) == 1:
         all_paras = page_paragraphs[0]
