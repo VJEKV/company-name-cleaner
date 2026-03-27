@@ -722,21 +722,30 @@ class App(ctk.CTk):
         add_btns = ctk.CTkFrame(right, fg_color="transparent")
         add_btns.pack(fill="x", padx=6, pady=(0, 4))
 
-        btn_cfg = [
+        btn_row1 = [
             ("+ Орг", "Организация", C["m_org"]),
             ("+ Город", "Город", C["m_city"]),
             ("+ Адрес", "Адрес", C["m_address"]),
             ("+ ФИО подп.", "ФИО подписант", C["m_surname"]),
             ("+ ФИО уч.", "ФИО участники", C["m_surname"]),
+        ]
+        btn_row2 = [
+            ("+ Уст.", "Установка", C["m_unit"]),
+            ("+ Рекв.", "Реквизиты", C["m_req"]),
+            ("+ Конт.", "Телефон/Email", C["m_contact"]),
             ("+ Своё", "Своё поле", C["add"]),
         ]
-        for text, ft, color in btn_cfg:
-            ctk.CTkButton(add_btns, text=text, width=50, height=22,
-                          fg_color=color, hover_color=C["add_h"],
-                          text_color="#000000" if color in (C["m_surname"], C["m_city"], C["m_address"]) else C["text"],
-                          font=ctk.CTkFont(size=10),
-                          command=lambda n=ft: self._add_field_row(n)
-                          ).pack(side="left", padx=1)
+        dark_text_colors = {C["m_surname"], C["m_city"], C["m_unit"]}
+        for row_btns in (btn_row1, btn_row2):
+            row_frame = ctk.CTkFrame(add_btns, fg_color="transparent")
+            row_frame.pack(fill="x", pady=1)
+            for text, ft, color in row_btns:
+                ctk.CTkButton(row_frame, text=text, width=55, height=22,
+                              fg_color=color, hover_color=C["add_h"],
+                              text_color="#000000" if color in dark_text_colors else C["text"],
+                              font=ctk.CTkFont(size=10),
+                              command=lambda n=ft: self._add_field_row(n)
+                              ).pack(side="left", padx=1)
 
         # ═══ НИЖНЯЯ ПАНЕЛЬ — КНОПКИ ДЕЙСТВИЙ ═══
         bottom = ctk.CTkFrame(self, fg_color=C["surface"], height=70, corner_radius=0)
@@ -820,6 +829,7 @@ class App(ctk.CTk):
             "surname": "surname",
             "city": "city",
             "address": "address",
+            "unit": "unit",
             "inn": "req", "ogrn": "req", "kpp": "req", "bik": "req", "account": "req",
             "phone": "contact", "email": "contact", "url": "contact",
             "snils": "doc", "passport": "doc",
@@ -829,7 +839,7 @@ class App(ctk.CTk):
             "inn": "ИНН", "ogrn": "ОГРН", "kpp": "КПП", "bik": "БИК",
             "account": "Счёт", "phone": "Тел", "email": "Email",
             "url": "URL", "address": "Адрес", "snils": "СНИЛС",
-            "passport": "Пасп",
+            "passport": "Пасп", "unit": "Уст",
         }
 
         # Собираем данные по группам: group_key -> [(label, src_text, repl_text, source, occurrences)]
@@ -1522,6 +1532,12 @@ class App(ctk.CTk):
                     rules.append({"patterns": pats, "mapper": mapper, "type": "surnames"})
             elif ft == "Адрес":
                 rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "address"})
+            elif ft == "Установка":
+                rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "unit"})
+            elif ft == "Реквизиты":
+                rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "requisite"})
+            elif ft == "Телефон/Email":
+                rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "contact"})
             elif ft == "Своё поле":
                 rules.append({"patterns": build_custom_patterns(search), "replacement": replace, "type": "custom"})
         return rules
