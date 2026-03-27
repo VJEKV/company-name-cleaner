@@ -1402,6 +1402,38 @@ class App(ctk.CTk):
                     used.add(row.get_replace())
         return used
 
+    def _ensure_detect_results(self):
+        """Создаёт базовые структуры результатов если автопоиск не запускался."""
+        if self._last_detect_results or not self.files:
+            return
+        for fp in self.files:
+            ext = Path(fp).suffix.lower()
+            text = ""
+            pages = {}
+            try:
+                if ext == '.docx':
+                    text = preview_docx(fp)
+                    pages = {1: text}
+                elif ext == '.pdf':
+                    import fitz
+                    doc = fitz.open(fp)
+                    for i, page in enumerate(doc):
+                        pages[i + 1] = page.get_text()
+                    text = ''.join(pages.values())
+                    doc.close()
+                elif ext in ('.xlsx', '.xls'):
+                    from core.xlsx_cleaner import extract_text_xlsx
+                    text = extract_text_xlsx(fp)
+                    pages = {1: text}
+            except Exception:
+                continue
+            self._last_detect_results.append({
+                "filepath": fp, "entities": [], "pages": pages,
+                "text": text, "by_type": {}, "error": None,
+            })
+        if self._last_detect_results:
+            self._show_preview(self._last_detect_results)
+
     def _add_selected_text(self):
         """Добавляет выделенный текст как правило замены и подсвечивает в превью."""
         sel = getattr(self, '_pending_selection', None)
@@ -1424,8 +1456,8 @@ class App(ctk.CTk):
         self.sel_text_label.configure(text=f"Добавлено: «{sel[:40]}»", text_color=C["green"])
         self._pending_selection = None
 
-        # Определяем entity_type для маркера
-        etype = FIELD_TYPE_MAP.get(ft, "organization")
+        # Если автопоиск не запускался — загрузить тексты файлов
+        self._ensure_detect_results()
 
         # Добавляем как entity во ВСЕ файлы (ищем все вхождения)
         import re as _re
@@ -1434,6 +1466,11 @@ class App(ctk.CTk):
         added_count = 0
         for r in self._last_detect_results:
             full_text = r.get("text", "")
+            if not full_text:
+                # Для PDF собрать из pages
+                full_text = ''.join(str(v) for v in r.get("pages", {}).values())
+                if full_text:
+                    r["text"] = full_text
             if not full_text:
                 continue
             for m in _re.finditer(_re.escape(sel), full_text, _re.IGNORECASE):
@@ -1473,8 +1510,8 @@ class App(ctk.CTk):
         self.found_label.configure(text=f"Найдено: {total}")
         self._update_map_panel()
         self._update_used_replacements()
-        if added_count > 1:
-            self._log(f"  Найдено {added_count} вхождений «{sel[:30]}»", "info")
+        if added_count > 0:
+            self._log(f"  «{sel[:30]}»: {added_count} вхождений", "info")
 
         self._ask_add_inclusion(sel, etype)
 
